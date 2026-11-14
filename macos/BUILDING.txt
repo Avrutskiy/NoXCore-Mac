@@ -23,7 +23,7 @@ activate it. Launch through Finder or Launch Services, including when passing ar
 Launching Contents/MacOS/noxcore directly from Terminal may prevent Game Mode activation.
 If a player previously disabled Game Mode for this app, macOS remembers that choice;
 they can turn it back on in the Game Overlay (Command-Esc) while in full screen.
-The opt-in does not change the selected display mode or the notch limitation below.
+The opt-in does not change the selected display mode.
 
 Data and writable state
 -----------------------
@@ -54,9 +54,10 @@ the signed bundle. Launching its Contents/MacOS/noxcore executable also uses thi
 
 Source structure
 ----------------
-Upstream PR #22 supplies two Mac policy functions: a settings directory and additional
-window-creation flags. Other platforms use inline defaults. The upstream default
-implementations and shaders remain the normal build. The fork's implementation changes
+Upstream PRs #22 and #28 supply three Mac policy functions: a settings directory,
+additional window-creation flags and an optional usable render area. Other platforms
+use inline defaults. The upstream default implementations and shaders remain the
+normal build. The fork's implementation changes
 are confined to macos/ and its Mac workflow; shared engine and client sources match upstream.
 
 macos/sdl_metal_upload.cmake backports SDL commit 32f9c098 (Metal upload row stride)
@@ -70,13 +71,21 @@ upstream's targets exist. CMake's SOURCES target property replaces backend_hooks
 and gpu_shader_code.cpp with the Mac implementations; configuration fails if either
 expected source is missing. It also adds the launcher, Metal shaders and app packaging. SDL's
 standard callback entry point is emitted by launcher.cpp, which prepares state and calls
-the original SDL_AppInit. SDL_AppIterate, SDL_AppEvent and SDL_AppQuit remain upstream.
+the original SDL_AppInit. Mac wrappers around SDL_AppEvent and SDL_AppIterate filter
+pointer input and update confinement after upstream layout and mouse-owner changes.
+SDL_AppQuit remains upstream.
 No existing NoXCore source file is patched or copied into a modified build tree.
 
-The notch/safe-area changes in upstream PR #23 are not included. The Mac build does not
-enable NOXSDL_USE_DISPLAY_SAFE_AREA, and the bundle does not override macOS's display
-safe-area compatibility policy. Exclusive fullscreen on a notched display has a known
-layout/input limitation. Use windowed mode if content or pointer alignment is affected.
+SDL's render safe area fits the game and movie output below the notch. Pointer bounds
+use window points, rounding inward when converting from render pixels. Queued relative
+mouse events are clamped before game-coordinate mapping; absolute presses and wheel
+events outside the usable area are ignored, while releases still reach the game.
+Embedded editor play views retain ownership of their own confinement rectangles.
+
+Both editors get their safe work area through a per-context ImGui NewFramePost hook.
+CMake renames only the bundled SDL backend initializer so the Mac adapter can call it
+and install the hook. This uses the pinned ImGui context-hook API; recheck it when
+upgrading ImGui. The bundle leaves macOS's display compatibility policy unchanged.
 
 Checks
 ------
@@ -85,6 +94,23 @@ Asset-free startup and migration tests:
   cmake -S macos/tests -B build/mac-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
   cmake --build build/mac-tests
   ctest --test-dir build/mac-tests --output-on-failure
+
+Asset-free safe-area checks (requires the full Mac client build and Ninja):
+
+  cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake -DNOX_BUILD_NOTCH_TESTS=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+  cmake --build build/macos-arm64 --target noxsdl_bundle nox_notch_policy_tests nox_notch_display_smoke -j 4
+  ctest --test-dir build/macos-arm64 -R mac_notch --output-on-failure
+
+These cover Retina conversion, queued input, confinement ownership, game/editor
+handoffs, rendered margins, movie viewport restoration and ImGui work-area refresh.
+The integration harness links production objects with SDL's dummy driver and controlled
+frame delegates; it does not exercise a full gameplay session. It reuses Ninja's link
+command and the pinned SDL private test seam, without changing production artifacts.
+For a native Metal check, run the following in a Mac graphics session. It briefly
+enters desktop and exclusive fullscreen, prints the display's actual safe bounds and
+checks rendered pixels. A notched display is needed to validate a nonzero native inset.
+
+  build/macos-arm64/nox_notch_display_smoke
 
 On a Mac graphics session, compile and run GPU checks:
 
@@ -98,7 +124,7 @@ These check shader creation/readback and Metal atlas uploads with the upstream
 
 Maintenance
 -----------
-Keep Mac implementation, packaging and tests in Mac files. Compare the fork against its
-upstream base: all entries must be added files except README.md. PR #22 is part of the
-upstream base; keep PR #23 separate until it is accepted and deliberately enabled.
+Keep Mac implementation, packaging and tests in Mac files. Shared engine and client
+sources must match the upstream base. PRs #22 and #28 are part of that base; the Mac
+safe-area policy lives entirely in this fork.
 Preserve release tags when updating main; release assets must match their tagged source.

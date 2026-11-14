@@ -2,9 +2,13 @@
 // main.cpp still defines the unmodified upstream callbacks, without its entry-point wrapper.
 #define SDL_MAIN_USE_CALLBACKS 1
 #define SDL_AppInit MacAppInit
+#define SDL_AppEvent MacAppEvent
+#define SDL_AppIterate MacAppIterate
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #undef SDL_AppInit
+#undef SDL_AppEvent
+#undef SDL_AppIterate
 
 #include "startup.hpp"
 
