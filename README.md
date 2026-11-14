@@ -60,9 +60,8 @@ Place it in your Nox data folder, or copy your data to
 `~/Library/Application Support/NoXCore/GameData`. Settings and saves use
 `~/Library/Application Support/NoXCore/UserData`. See [macos/BUILDING.txt](macos/BUILDING.txt) for details.
 
-The opt-in notch/safe-area changes in upstream PR #23 are not included yet. Exclusive
-fullscreen on a notched display has a known layout/input limitation; use windowed mode
-if content or pointer alignment is affected.
+On notched displays, fullscreen game content, movies and editor controls stay within
+the display safe area. Pointer bounds follow the same layout.
 
 The first configure downloads the pinned third-party libraries, so it needs a network connection.
 

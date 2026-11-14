@@ -18,4 +18,12 @@ const std::filesystem::path& settingsDirectory(const std::filesystem::path& game
     return userDirectory.empty() ? gameDir : userDirectory;
 }
 SDL_WindowFlags additionalWindowFlags() { return SDL_WINDOW_HIGH_PIXEL_DENSITY; }
+
+std::optional<SDL_Rect> usableRenderArea(SDL_Renderer* renderer)
+{
+    SDL_Rect area{};
+    if (renderer && SDL_GetRenderSafeArea(renderer, &area) && area.w > 0 && area.h > 0) return area;
+    return std::nullopt;
+}
+
 } // namespace noxsdl::backend

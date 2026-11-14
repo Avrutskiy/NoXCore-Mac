@@ -17,15 +17,17 @@ jobs:
       - name: Build tools
         run: brew install cmake ninja glslang spirv-cross
       - name: Configure
-        run: cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake -DNOX_BUILD_METAL_TESTS=ON
-      - name: Build client, app and GPU checks
-        run: cmake --build build/macos-arm64 --target noxsdl_bundle nox_metal_smoke nox_gpu_atlas_tests -j 3
+        run: cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake -DNOX_BUILD_METAL_TESTS=ON -DNOX_BUILD_NOTCH_TESTS=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+      - name: Build client, app and Mac checks
+        run: cmake --build build/macos-arm64 --target noxsdl_bundle nox_metal_smoke nox_gpu_atlas_tests nox_notch_policy_tests nox_notch_display_smoke -j 3
       - name: Startup and migration tests
         run: |
           cmake -S macos/tests -B build/mac-tests -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build/mac-tests
           ctest --test-dir build/mac-tests --output-on-failure
-      # Metal runtime checks run locally on a real graphics session.
+      - name: Safe-area tests
+        run: ctest --test-dir build/macos-arm64 -R mac_notch --output-on-failure
+      # Native Metal and fullscreen checks run locally on a real graphics session.
       - name: Package
         run: ditto -c -k --keepParent "build/macos-arm64/NoX Core.app" build/NoXCore-macOS-arm64.zip
       - uses: actions/upload-artifact@v4

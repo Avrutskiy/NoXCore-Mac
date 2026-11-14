@@ -81,6 +81,11 @@ Launch prepareLaunch(std::vector<std::string> arguments, const LaunchPaths& path
             arguments.push_back(value.string());
         }
     };
+    if (!option(arguments, "--mods-dir")) {
+        const auto mods = user / "Mods";
+        prepareUserMods(paths.executable / "mods", mods);
+        defaultOption("--mods-dir", mods);
+    }
     defaultOption("--game-dir", game);
     defaultOption("--save-dir", user / "Save");
     defaultOption("--map-cache", user / "Cache/maps");
