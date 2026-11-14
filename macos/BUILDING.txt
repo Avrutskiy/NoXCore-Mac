@@ -8,6 +8,9 @@ glslang and SPIRV-Cross. The deployment target follows libc++ floating-point fro
   cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake
   cmake --build build/macos-arm64 --target noxsdl_bundle -j 4
 
+Packaging verifies a fresh staged bundle before replacing the previous build, so
+removed resources do not survive a rebuild. Keep user content outside the build bundle.
+
 The first configure downloads the pinned upstream dependencies. The app is
 build/macos-arm64/NoX Core.app. It is ad-hoc signed, not notarized. It includes fonts,
 licenses and mods, but no original game data. NOX_BUILD_VIDEOTOOLS is OFF for this build.
@@ -34,7 +37,8 @@ bundle and usual folders. The launcher passes the selected directory to upstream
 
 Settings and saves use ~/Library/Application Support/NoXCore/UserData, with saves in
 Save/. --user-dir overrides this Mac location. Migration preserves existing user files
-and does not resurrect deleted characters. Input Config Reset reads the user nox.cfg;
+and does not resurrect deleted characters. Overlapping save-import directories are
+rejected before copying, including paths reached through symlinks. Input Config Reset reads the user nox.cfg;
 Defaults reads the installed game default.cfg.
 
 For backups or transfers, quit the game and copy the entire UserData/Save directory,
@@ -47,7 +51,14 @@ SDL_GetPrefPath selects the persistent per-user location; on macOS this is Appli
 Support. This keeps settings and progress independent of asset-folder permissions and
 app updates.
 
-The launcher supplies --save-dir, --map-cache and --log defaults through upstream's
+Mods live in UserData/Mods. Bundled editable mods are imported once, without merging
+into existing projects or restoring deleted projects. Bundled reference mods (such as
+Deep Delve) follow app updates; the editor opens those as separate editable copies.
+An editable project with the same folder name is preserved. Back up
+Mods along with Save when keeping custom work. --mods-dir selects another mod folder
+and skips bundled import.
+
+The launcher supplies --save-dir, --mods-dir, --map-cache and --log defaults through upstream's
 existing options. Explicit values retain precedence. The default log is
 ~/Library/Application Support/noxcpp/noxsdl/noxcore-log.txt. These defaults keep settings, saves, map caches and logs outside
 the signed bundle. Launching its Contents/MacOS/noxcore executable also uses this setup.

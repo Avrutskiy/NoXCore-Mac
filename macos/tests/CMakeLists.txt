@@ -12,3 +12,8 @@ add_executable(user_data_tests user_data_tests.cpp "${root}/macos/user_data.cpp"
 target_compile_features(user_data_tests PRIVATE cxx_std_20)
 target_include_directories(user_data_tests PRIVATE "${root}/macos" "${core}/include")
 add_test(NAME mac_user_data COMMAND user_data_tests)
+
+foreach(test IN ITEMS startup_tests user_data_tests)
+    target_sources(${test} PRIVATE "${root}/noxsdl/src/editor/ordered_json.cpp")
+    target_include_directories(${test} PRIVATE "${root}/noxsdl/src")
+endforeach()

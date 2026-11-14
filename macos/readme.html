@@ -31,6 +31,10 @@ or restore deleted characters.</p>
 <p>From Terminal, <code>--user-dir "/path/to/UserData"</code> changes the settings location and
 the default save location to its <code>Save</code> subfolder. An explicit
 <code>--save-dir "/path/to/Save"</code> overrides the save location and skips automatic save import.</p>
+<p>Mods live in <code>UserData/Mods</code>. Bundled editable mods are imported once;
+existing projects and later edits or deletions are preserved. Bundled reference mods
+follow app updates; the editor opens those as separate editable copies. Include <code>Mods</code> in backups of custom work.
+<code>--mods-dir</code> selects another folder and skips the import.</p>
 <p>The log is <code>~/Library/Application Support/noxcpp/noxsdl/noxcore-log.txt</code>.</p>
 <p>On notched displays, fullscreen game content, movies and editor controls stay within
 the display safe area. Pointer bounds follow the same layout.</p>

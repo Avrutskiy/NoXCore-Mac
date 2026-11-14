@@ -1,4 +1,8 @@
 # Ad-hoc signed .app packaging. No game assets; SDL_GetBasePath points to Resources.
+# Assemble and verify a fresh bundle before replacing the previous build.
+set(destination "${BUNDLE}")
+set(BUNDLE "${BUNDLE}.staging")
+file(REMOVE_RECURSE "${BUNDLE}")
 file(MAKE_DIRECTORY "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources")
 file(COPY_FILE "${EXECUTABLE}" "${BUNDLE}/Contents/MacOS/noxcore" ONLY_IF_DIFFERENT)
 file(COPY_FILE "${PLIST}" "${BUNDLE}/Contents/Info.plist" ONLY_IF_DIFFERENT)
@@ -31,4 +35,6 @@ execute_process(COMMAND /usr/bin/iconutil -c icns "${iconset}"
     -o "${BUNDLE}/Contents/Resources/noxcore.icns" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND /usr/bin/codesign --force --sign - --timestamp=none "${BUNDLE}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND /usr/bin/codesign --verify --strict "${BUNDLE}" COMMAND_ERROR_IS_FATAL ANY)
-message(STATUS "App: ${BUNDLE} (ad-hoc signed; not Developer ID signed or notarized)")
+file(REMOVE_RECURSE "${destination}")
+file(RENAME "${BUNDLE}" "${destination}")
+message(STATUS "App: ${destination} (ad-hoc signed; not Developer ID signed or notarized)")

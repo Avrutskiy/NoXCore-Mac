@@ -43,6 +43,7 @@ int main()
         require(launch.settings == user, "settings use the writable location");
         require(option(launch.arguments, "--save-dir") == (user / "Save").string(), "save default passed to upstream");
         require(option(launch.arguments, "--map-cache") == (user / "Cache/maps").string(), "map cache default passed to upstream");
+        require(option(launch.arguments, "--mods-dir") == (user / "Mods").string(), "mods use writable user projects");
         require(option(launch.arguments, "--log") == paths.log.string(), "log default passed to upstream");
         require(fs::exists(user / "Save/Hero.plr") && fs::exists(user / "default.cfg"), "settings and characters migrated");
         fs::remove(user / "Save/Hero.plr");
@@ -52,10 +53,11 @@ int main()
         std::ifstream saved(user / "nox.cfg"); std::string line; std::getline(saved, line);
         require(line == "User = 2", "existing user configuration must not be overwritten");
         launch = noxsdl::macos::prepareLaunch({"noxcore", "--game-dir", assets.string(), "--user-dir", custom.string(),
-            "--save-dir", (root / "external/Save").string(), "--log", "chosen.log", "--map-cache", "chosen-cache"}, paths);
+            "--save-dir", (root / "external/Save").string(), "--mods-dir", "custom-mods", "--log", "chosen.log", "--map-cache", "chosen-cache"}, paths);
         require(launch.settings == custom && !option(launch.arguments, "--user-dir"), "Mac option consumed before upstream parsing");
         require(option(launch.arguments, "--save-dir") == (root / "external/Save").string(), "explicit saves preserved");
         require(option(launch.arguments, "--log") == "chosen.log" && option(launch.arguments, "--map-cache") == "chosen-cache", "explicit log/cache preserved");
+        require(option(launch.arguments, "--mods-dir") == "custom-mods" && !fs::exists(custom / "Mods"), "explicit mods directory skips import");
         require(!fs::exists(custom / "Save/Hero.plr"), "independent saves must not be migrated");
         require(!fs::exists(custom / ".saves-import-complete"), "independent saves must not mark migration complete");
         fs::create_directories(paths.executable);

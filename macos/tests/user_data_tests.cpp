@@ -66,6 +66,63 @@ int main()
             require(fs::is_regular_file(user / marker), "import marker belongs in user directory");
             require(!fs::exists(assets / marker), "no import markers in source assets");
         }
+
+        // Overlapping save imports must fail before creating a tree inside their own source.
+        for (const auto& nested : {assets / "SAVE/nested-user", assets / "save/case-alias-user"}) {
+            if (!fs::exists(nested.parent_path())) continue; // Case aliases only on a case-insensitive volume.
+            bool rejected = false;
+            try { noxsdl::prepareUserData(assets, nested, true); }
+            catch (const std::runtime_error&) { rejected = true; }
+            require(rejected && !fs::exists(nested), "nested save import rejected without copying");
+        }
+        fs::create_directory_symlink(assets / "SAVE", root / "save-link");
+        bool rejected = false;
+        try { noxsdl::prepareUserData(assets, root / "save-link/nested-user", true); }
+        catch (const std::runtime_error&) { rejected = true; }
+        require(rejected && !fs::exists(assets / "SAVE/nested-user"), "save overlap through symlink rejected");
+
+        const auto bundled = root / "bundle-mods", mods = root / "mods";
+        noxsdl::prepareUserMods(bundled, mods);
+        require(!fs::exists(mods / ".bundled-import-complete"), "missing bundle must not consume import");
+        fs::create_directories(bundled / "sample/server");
+        fs::create_directories(bundled / "existing/server");
+        fs::create_directories(mods / "existing");
+        std::ofstream(bundled / "sample/server/main.luau") << "bundled script";
+        std::ofstream(bundled / "existing/server/main.luau") << "unrelated bundled script";
+        std::ofstream(mods / "existing/mode.json") << "user project";
+        fs::permissions(bundled / "sample/server", fs::perms::owner_read | fs::perms::owner_exec);
+        fs::permissions(bundled / "sample/server/main.luau", fs::perms::owner_read);
+        noxsdl::prepareUserMods(bundled, mods);
+        require(read(mods / "sample/server/main.luau") == "bundled script", "bundled mod imported");
+        require(!fs::exists(mods / "existing/server"), "existing user project never merged with bundled one");
+        std::ofstream(mods / "sample/server/main.luau") << "user edit";
+        std::ofstream(mods / "sample/server/new.luau") << "new user file";
+        require(read(mods / "sample/server/main.luau") == "user edit" && fs::exists(mods / "sample/server/new.luau"),
+                "imported files and directories are writable");
+        noxsdl::prepareUserMods(bundled, mods);
+        require(read(mods / "sample/server/main.luau") == "user edit", "mod edits survive relaunch");
+        fs::remove_all(mods / "sample");
+        noxsdl::prepareUserMods(bundled, mods);
+        require(!fs::exists(mods / "sample"), "deleted mod is not resurrected");
+        fs::create_directories(bundled / "reference");
+        std::ofstream(bundled / "reference/mode.json") << R"({"reference":true})";
+        std::ofstream(bundled / "reference/script.luau") << "version one";
+        std::ofstream(bundled / "reference/retired.luau") << "old file";
+        noxsdl::prepareUserMods(bundled, mods);
+        require(read(mods / "reference/script.luau") == "version one", "new bundled reference imported after first launch");
+        const auto stamp = fs::last_write_time(mods / "reference/script.luau");
+        noxsdl::prepareUserMods(bundled, mods);
+        require(fs::last_write_time(mods / "reference/script.luau") == stamp, "unchanged references are not recopied");
+        std::ofstream(bundled / "reference/script.luau") << "version two";
+        fs::remove(bundled / "reference/retired.luau");
+        noxsdl::prepareUserMods(bundled, mods);
+        require(read(mods / "reference/script.luau") == "version two" && !fs::exists(mods / "reference/retired.luau"),
+                "reference upgrades replace the complete tree without stale files");
+        std::ofstream(mods / "reference/mode.json") << R"({"reference":false})";
+        std::ofstream(mods / "reference/script.luau") << "editable user version";
+        noxsdl::prepareUserMods(bundled, mods);
+        require(read(mods / "reference/script.luau") == "editable user version", "editable project is never replaced by a reference");
+        fs::permissions(bundled / "sample/server", fs::perms::owner_all);
         std::ofstream(root / "not-directory") << "blocked";
         bool failed = false;
         try {
