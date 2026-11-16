@@ -20,6 +20,7 @@
 #include "editor/chat_log.hpp"
 #include "editor/commands.hpp"
 #include "editor/editor_settings.hpp"
+#include "editor/file_pick.hpp"
 #include "editor/held_edit.hpp"
 #include "editor/imgui_host.hpp"
 #include "editor/play_test.hpp"
@@ -568,6 +569,15 @@ private:
     nox::mapedit::EdgeRules rules_;
     nox::mapedit::PaintSettings paint_;
     bool showEdgeRules_ = false;
+    /// The Edge Rules window's choices between frames (edgeRulesWindow): the priority list's
+    /// selected floor, the floor to add, and the pair override being made (the floor lapping, the
+    /// floor under it, its kind, and its edge: -1 until the window first shows, then the edge
+    /// tool's set). -1: none chosen.
+    struct EdgeRulesPanel {
+        int selected = -1;
+        int add = -1;
+        int over = -1, base = -1, kind = 0, edge = -1;
+    } edgeRulesPanel_;
     std::map<std::string, SDL_Texture*> thumbs_;
     char pickerFilter_[64] = {};
     /// A type's collision shape as the Extents layer draws it (its EXTENT, FLAGS and ZSIZE read
@@ -589,9 +599,9 @@ private:
     std::uint64_t validatedRevision_ = ~0ull;
     std::uint64_t changedMs_ = 0;
 
-    // A file picked in the system's dialog (its callback may come from another thread).
-    std::mutex pickedMutex_;
-    std::optional<std::string> picked_;
+    // A file picked in the system's dialog (its answer may come from another thread, and after the
+    // editor is gone).
+    editor::FilePick filePick_;
 
     std::unique_ptr<ScriptPanel> scriptPanel_; ///< the Script panels, play-test and hot reload
     std::unique_ptr<ModPanel> modPanel_;       ///< mod projects: the Mod menu and windows

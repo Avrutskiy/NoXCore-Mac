@@ -2,6 +2,10 @@
 // with the movie's sound, draws them letterboxed and handles skipping.
 #include "movie_player.hpp"
 
+#include "movie_clock.hpp"
+
+#include "noxcore/io/file.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -66,7 +70,7 @@ bool MoviePlayer::openHd(const std::filesystem::path& file)
     std::string error;
     hd_ = HdVideo::open(file, error);
     if (!hd_) {
-        SDL_Log("HD video: %s: %s; the VQA plays", file.string().c_str(), error.c_str());
+        SDL_Log("HD video: %s: %s; the VQA plays", nox::pathUtf8(file).c_str(), error.c_str());
         return false;
     }
     fps_ = hd_->fps() > 0 ? hd_->fps() : 15;
@@ -100,7 +104,7 @@ void MoviePlayer::vqaTiming(const std::filesystem::path& file)
             frames_ = h.frames;
         }
     } catch (const std::exception& ex) {
-        SDL_Log("movie %s: %s; the HD movie keeps its own timing", file.string().c_str(), ex.what());
+        SDL_Log("movie %s: %s; the HD movie keeps its own timing", nox::pathUtf8(file).c_str(), ex.what());
     }
 }
 
@@ -114,7 +118,7 @@ bool MoviePlayer::openVqa(const std::filesystem::path& file)
         vqa_ = std::make_unique<nox::video::VqaDecoder>(data);
         vqaSound_ = std::make_unique<nox::video::VqaAudioDecoder>(data);
     } catch (const std::exception& ex) {
-        SDL_Log("movie %s: %s", file.string().c_str(), ex.what());
+        SDL_Log("movie %s: %s", nox::pathUtf8(file).c_str(), ex.what());
         vqa_.reset();
         vqaSound_.reset();
         return false;
@@ -165,6 +169,10 @@ void MoviePlayer::play(const std::string& name, movies::Skip skip, std::function
     if (!opened) {
         state_ = State::Done;
         return;
+    }
+    if (hasSound_ && !movieSoundTimes(hasSound_, soundRate_)) {
+        SDL_Log("movie %s: its sound has no rate; played without it", name.c_str());
+        hasSound_ = false;
     }
     SDL_Log("movie %s: %s, %dx%d, %d frames at %.3g fps", name.c_str(), hd_ ? "HD" : "VQA", width_, height_, frames_, fps_);
     if (texture_) {

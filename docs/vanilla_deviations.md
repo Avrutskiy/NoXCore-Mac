@@ -38,7 +38,7 @@ What follows from it:
   similar lists are grouped under one id each; their items are cited by the id and the item's
   bold words.
 - Name the original's code by logical name only: the game's own function name
-  (`SrvNet_OnPacket`, `Spell_CastMagicMissile`), an OpenNox name without its prefix and address
+  (`SrvNet_OnPacket`, `Spell_CastMagicMissile`), a community name without its prefix and address
   (`plrReadVals`), or a few words ("the reliable queue's flush"). No addresses or offsets.
 - Say where our version lives (paths under `noxcore/` and `noxsdl/`, or class and function
   names), and refer only to public material: the source and these two documents.
@@ -154,6 +154,22 @@ What follows from it:
   resend reliable packets it thinks we lost.
 - **Risk:** low; the server decoder accepts 0xBE at any time (it only advances past it).
 - **Revert:** remove the keep-alive block in `gameFrame`.
+
+### VD-75: A client's packet is read no further once a message in it has let that client go
+
+- **Vanilla:** the server reads the rest of a client's packet after one of its messages disconnects
+  that client (a refused character file, a kick), against the player and unit it looked up when
+  the packet began. Only a refused save request (0xC1) and its gauntlet messages stop there.
+- **Ours:** once the sender is no longer in the game, the rest of its packet is dropped, after any
+  message (noxcore/src/server/game_host.cpp, GameHost::onPayload). Reading on had made a blank
+  player in its place, which wiped the first slot's known objects and saves waiting, and told
+  everyone a player with net code 0 quit. Inside one message too (NoX Core's own hooks, none of
+  them the exe's): a character file that lets its sender go isn't told to the mode (onCharacter),
+  and a chat line whose mode hook let its speaker go is neither relayed nor read on.
+- **Why:** by the owner's decision, 2026-11-14: a player who has been let go has no say in the game.
+- **Risk:** low: only the messages a player sent in the same packet after the one that let it go
+  are dropped (a mouse move, an input frame).
+- **Revert:** none safe: reading on needs the player kept until the packet ends.
 
 ### VD-74: Every game tells a player's health and mana changes at once, Westwood Online games too
 
@@ -1878,8 +1894,8 @@ The engine's logic is the exe's; these are where the output differs.
   install has no CD key in the registry), `USER UserName HostName irc.westwood.com
   :RealName`, `verchk 32512 720916` (WOLAPI's
   product code for the language and its chat version number) and `SETOPT 17,33` (others may
-  find and page the player). The community's patched WOLAPI.DLL (1.15, in the Nox Reloaded /
-  Nox Solution install) sends the same lines but asks servserv at xwis.net:4005 instead.
+  find and page the player). The community's patched WOLAPI.DLL (1.15, in community repack
+  installs) sends the same lines but asks servserv at xwis.net:4005 instead.
 - **Ours:** `lobby::XwisConnection` (noxcore/include/noxcore/lobby/servserv.hpp) sends the same query, always as
   English Nox (SKU 9472) and with an empty CD key, and takes the first matching chat server
   without a window. By decision, 2026-11-11, it goes in this order:
@@ -1954,6 +1970,38 @@ The engine's logic is the exe's; these are where the output differs.
   the nearest-waypoint search never reaches it.
 - **Ours:** MapGrid::registerWaypoint files it nowhere: the same searches, no memory written.
 - **Revert:** none wanted (memory safety).
+
+### VD-76: monster.bin's reader reads on where the game's stops
+
+- **Vanilla:** servParseMonsterDef stops reading the whole file at an unknown key (the record
+  being read freed), an unknown strike, die or dead function name, or damage type: every monster
+  after it is left without its numbers. readStr loses a word's letters before a `//` inside it
+  and reads on into the next line. monsterList frees every record when one names no thing type.
+  Of two records of one name the later is found (the list is built and searched from the front).
+  MISSILE_NAME's NULL is compared with case.
+- **Ours:** parseMonsterDb (`noxcore/src/things/monster_db.cpp`) reads on: an unknown key is
+  passed over with its value; an unknown function name is none; an unknown damage type leaves the
+  type as it was (always one of the 18); a `//` ends the word and runs to the line's end; NULL in
+  any case is none; of two records of a name the later stands, in the earlier's place (the game's
+  choice). MonsterDb::keepThingTypes drops a record whose name is no thing type and empties a
+  MISSILE_NAME no type has. Each is a line in MonsterDb::problems (at most 100, then one line for
+  the rest), which every host logs. The shipped file has none of these: it reads with no line
+  noted, exactly as the game reads it (a test holds this).
+- **Revert:** stop at the first noted place, as the game does (a modded file's later monsters then
+  without their numbers); not wanted: content packs patch monster.bin.
+
+### VD-77: A WebWand's spark is made and lasts 20 frames, where the game faults
+
+- **Vanilla:** FireWandUse's createSpark writes the spark's count and kind into update data and
+  its damage into collide data the shipped Spark type doesn't have: the host crashes
+  (original_bugs.md, OB-433), before useFireWand's sound.
+- **Ours:** the spark is made as the rest of createSpark makes it (its three draws, its place
+  and velocity, its classes and flags, raised to 28) and goes after 20 frames, the count the
+  missing data held (a decay: `fireWandUse` in `noxcore/src/server/items.cpp`); then sound 9 at
+  most once a second, by the wand's timer, as useFireWand goes on to do. The spark has no update
+  and no touch, as its type has none.
+- **Revert:** none wanted (a crash is no behaviour to keep); unreachable in a stock game (no map
+  places a WebWand, no class may wield one: OB-421).
 
 ### VD-37: "Exact Original Maths" switched off: the server's floats rounded to nearest
 

@@ -1,4 +1,4 @@
-// After OpenNox libs bag (MIT, Copyright (c) 2022 NoX World), checked against GAME.EXE; see
+// Based on OpenNox libs bag (MIT licence, Copyright (c) 2022 NoX World), checked against GAME.EXE; see
 // THIRD_PARTY_NOTICES.txt.
 #include "noxcore/video/video_bag.hpp"
 
@@ -27,7 +27,7 @@ VideoBag::VideoBag(const std::filesystem::path& bag, const std::filesystem::path
     : bag_(resolveNoCase(bag), std::ios::binary)
 {
     if (!bag_) {
-        throw std::system_error(errno, std::generic_category(), "cannot open " + bag.string());
+        throw std::system_error(errno, std::generic_category(), "cannot open " + pathUtf8(bag));
     }
     bag_.seekg(0, std::ios::end);
     bagSize_ = static_cast<std::uint64_t>(std::max<std::streamoff>(0, bag_.tellg()));

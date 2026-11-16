@@ -3,6 +3,7 @@
 #include "spellbook.hpp"
 
 #include "book_award.hpp"
+#include "draw_box.hpp"
 #include "hud.hpp"
 
 #include "noxcore/client/spell_bars.hpp"
@@ -29,10 +30,7 @@ constexpr std::uint32_t kInstant = 0x100, kTargeted = 4, kAtLocation = 8, kHosti
 constexpr SDL_Color kInk{15, 15, 15, 255};      ///< bookSetColor
 constexpr SDL_Color kDisabled{0x73, 100, 100, 255};
 
-bool inside(float x, float y, float rx, float ry, float rw, float rh)
-{
-    return x >= rx && y >= ry && x < rx + rw && y < ry + rh;
-}
+using box::inside;
 
 /// Case-insensitive, as the list's sort compares titles.
 bool titleLess(const std::string& a, const std::string& b)
@@ -48,15 +46,11 @@ Spellbook::Spellbook(const nox::things::ThingDb& things, const nox::strings::Str
                      SpriteCache& sprites, Font* font, const Hud& hud)
     : things_(things), strings_(strings), sprites_(sprites), font_(font), hud_(hud)
 {
-    for (const auto& i : things_.images) {
-        images_.emplace(i.name, &i);
-    }
 }
 
 const nox::things::ImageDef* Spellbook::image(const std::string& name) const
 {
-    const auto it = images_.find(name);
-    return it == images_.end() ? nullptr : it->second;
+    return things_.findImage(name); // (each name's first image, as thing.bin lists them)
 }
 
 std::string Spellbook::text(const std::string& id) const

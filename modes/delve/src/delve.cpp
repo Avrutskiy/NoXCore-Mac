@@ -1743,7 +1743,7 @@ void DelveDirector::beginLevel(GameHost& host, World& world, std::uint32_t frame
             continue;
         }
         const things::ThingDef* def = things_.findThing(o.typeName);
-        if (def && def->attribute("INIT").value_or("") == "ChestInit" && o.inventory.empty()) {
+        if (def && def->lastAttribute("INIT").value_or("") == "ChestInit" && o.inventory.empty()) {
             chests.push_back(extent);
         } else if (o.monster && !o.shopkeeper && !(o.flags & ObjFlag::Dead)) {
             maybe.push_back(extent);
@@ -3076,7 +3076,7 @@ void DelveDirector::pumpBotBoss()
     // The server on loopback (127.0.0.1), at its own port.
     const net::Endpoint server{0x7F000001, serverPort_};
     auto& c = b.bot->client();
-    std::uint8_t buffer[2048];
+    std::uint8_t buffer[net::kDatagramBufferSize];
     try {
         // What the server sent the bot on either socket, then the bot's turn and what it sends back.
         while (const auto got = b.lobby.receive(buffer)) {

@@ -38,16 +38,12 @@ namespace {
 
 using editor::help;
 using editor::pathText;
+using editor::u8path;
 using nox::util::lowered;
 
 constexpr std::uint64_t kAnalysisPauseMs = 600; ///< typing paused this long: the files checked
 constexpr std::uintmax_t kExportCap = 64u << 20; ///< the most an exported mod holds
 constexpr std::uint64_t kFilesCheckMs = 1000;    ///< how often Mod Files looks at the folder again
-
-fs::path u8path(std::string_view s)
-{
-    return fs::path(std::u8string(reinterpret_cast<const char8_t*>(s.data()), s.size()));
-}
 
 /// An InputText over a std::string (at most `cap` bytes).
 bool inputText(const char* id, std::string& s, std::size_t cap, ImGuiInputTextFlags flags = 0)
@@ -190,12 +186,10 @@ void ModPanel::registerCommands()
         sessionModId_.clear(); // (opened afresh at the next frame)
     }, [this] { return session() && session()->mod() && !sessionMod_; });
     add("mod.export", "Export Mod...", "Write the mod's folder as a zip for someone to unzip into their own mods\\ (nothing is uploaded).", [this] {
-        static std::pair<std::mutex*, std::optional<std::string>*> target;
-        target = {&pickedMutex_, &picked_};
         static const SDL_DialogFileFilter filters[] = {{"Zip archive", "zip"}};
         static std::string start;
         start = pathText(modsDir().parent_path() / (project_->folderName() + ".zip"));
-        SDL_ShowSaveFileDialog(editor::storePickedFile, &target, ed_.ctx_.window, filters, 1, start.c_str());
+        editor::saveFileDialog(filePick_, ed_.ctx_.window, filters, 1, start.c_str());
     }, open);
     add("mod.close", "Close Mod", "Close the mod's windows (unsaved changes are asked about).", [this] {
         askThen([this] {
@@ -1005,11 +999,7 @@ void ModPanel::tick()
             requestAnalysis();
         }
     }
-    std::optional<std::string> picked;
-    {
-        std::lock_guard lock(pickedMutex_);
-        picked = std::exchange(picked_, std::nullopt);
-    }
+    const std::optional<std::string> picked = filePick_.take();
     if (picked && project_) {
         fs::path p = u8path(*picked);
         if (p.extension().empty()) {

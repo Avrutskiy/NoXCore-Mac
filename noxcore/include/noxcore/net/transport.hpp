@@ -44,6 +44,13 @@ inline constexpr std::uint8_t kReliableBit = 0x80;
 inline constexpr std::size_t kMaxReliablePayload = 0x400; ///< Net init's (200, 0x400)
 inline constexpr std::size_t kMaxQueuedReliable = 200;
 inline constexpr std::size_t kClientBufferSize = 0x800;   ///< client stream buffer
+/// The largest datagram a stream sends, the game's or ours: the 2-byte header and an unreliable
+/// buffer of kClientBufferSize less one (Net_Send refuses at write pointer + length + 1 past the
+/// end: Stream::queueUnreliable's check). The game's servers and clients both have 0x800.
+inline constexpr std::size_t kMaxDatagram = 2 + kClientBufferSize - 1;
+/// A receive buffer for game datagrams: the game's own size (its stream buffer and the header),
+/// one byte past kMaxDatagram. (UdpSocket::receive skips a datagram that doesn't fit.)
+inline constexpr std::size_t kDatagramBufferSize = kClientBufferSize + 2;
 inline constexpr std::uint32_t kResendDelayMs = 2000;
 inline constexpr std::uint32_t kResendTimerMs = 1000;
 inline constexpr std::uint32_t kConnectTimeoutMs = 60 * 1000; ///< cliWaitServerResponse
@@ -149,6 +156,39 @@ private:
     std::vector<Packet> queue_; ///< oldest first
     std::vector<std::uint8_t> unreliable_;
 };
+
+// The control messages both ends of a stream handle alike (ClientConnection, ServerTransport).
+
+/// The resend timer, as the exe's runs (at most once per kResendTimerMs): its first call starts
+/// it (`started`, `last`); once past its time, `stream`'s packets sent long enough ago are marked
+/// due again (Stream::markOverdue). Whether it ran.
+inline bool runResendTimer(Stream& stream, bool& started, std::uint32_t& last, std::uint32_t nowMs)
+{
+    if (!started) {
+        started = true;
+        last = nowMs;
+    } else if (static_cast<std::int32_t>(nowMs - last) > static_cast<std::int32_t>(kResendTimerMs)) {
+        stream.markOverdue(nowMs);
+        last = nowMs;
+        return true;
+    }
+    return false;
+}
+/// CLIENT_PONG answering a CLIENT_PING whose time was `pinged`: [stream id][expected seq][op][u32].
+inline std::vector<std::uint8_t> clientPong(std::uint8_t streamId, std::uint8_t expectedSeq, std::uint32_t pinged)
+{
+    return {streamId, expectedSeq, static_cast<std::uint8_t>(Op::ClientPong), static_cast<std::uint8_t>(pinged),
+            static_cast<std::uint8_t>(pinged >> 8), static_cast<std::uint8_t>(pinged >> 16), static_cast<std::uint8_t>(pinged >> 24)};
+}
+/// An explicit ack (Accepted, 0x1F) applied to `stream`: the game's "0x26 ack" message when it
+/// changed something, else empty.
+inline std::vector<std::uint8_t> applyAccepted(Stream& stream, std::uint8_t ack)
+{
+    if (stream.applyAck(ack)) {
+        return {static_cast<std::uint8_t>(Op::Code38), ack};
+    }
+    return {};
+}
 
 /// A client's connection to a 1.2b server: lobby join, connect handshake and the stream.
 /// It owns no sockets: feed it datagrams and the time, and send what it hands back.

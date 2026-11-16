@@ -1,5 +1,5 @@
-// Ported from opennox-lib datapath (data.go, data_gog.go, data_reloaded.go, data_origin.go,
-// registry.go, paths.go), MIT, Copyright (c) 2022 NoX World. See THIRD_PARTY_NOTICES.txt.
+// Based on opennox-lib datapath (MIT licence, Copyright (c) 2022 NoX World); see
+// THIRD_PARTY_NOTICES.txt.
 #include "noxcore/io/game_dir.hpp"
 
 #include "noxcore/io/file.hpp"
@@ -134,7 +134,7 @@ std::optional<fs::path> registryString([[maybe_unused]] std::wstring_view key, [
 #endif
 }
 
-/// registry.go: the install keys the original game, GOG, Nox Reloaded and Origin write.
+/// registry.go: the install keys the original game (and its repacks), GOG and Origin write.
 void registryPaths(Candidates& out)
 {
     struct Key {
@@ -230,8 +230,8 @@ std::vector<GameDirCandidate> gameDirSearch(const fs::path& exeDir, const fs::pa
     withPrefixes({"Nox"}, "a usual install folder", out);
 #endif
     registryPaths(out);
-    gogPaths(out); // GOG before Reloaded and Origin: patched and official
-    withPrefixes({"Program Files (x86)\\Nox", "Program Files\\Nox"}, "a usual Nox Reloaded folder", out);
+    gogPaths(out); // GOG before the Program Files and Origin folders: patched and official
+    withPrefixes({"Program Files (x86)\\Nox", "Program Files\\Nox"}, "a usual Program Files folder", out);
     withPrefixes({"Program Files (x86)\\Origin Games\\Nox", "Program Files\\Origin Games\\Nox"}, "a usual Origin folder", out);
     if (!configured.empty()) {
         out.push_back({configured, "the folder this build was set up with"}); // the last resort
@@ -245,7 +245,7 @@ std::optional<GameDirCandidate> locateGameDir(const fs::path& exeDir, const fs::
     for (auto& c : gameDirSearch(exeDir, configured)) {
         const bool found = isGameDir(c.dir);
         if (log) {
-            log((found ? "game data found in " : "no game data in ") + c.dir.string() + " (" + c.reason + ")");
+            log((found ? "game data found in " : "no game data in ") + pathUtf8(c.dir) + " (" + c.reason + ")");
         }
         if (found) {
             std::error_code ec;

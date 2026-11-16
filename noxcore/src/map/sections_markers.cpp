@@ -74,7 +74,9 @@ Polygons Polygons::parse(std::span<const std::uint8_t> data)
         p.x = r.f32();
         p.y = r.f32();
     }
-    s.polygons.resize(r.count(r.u32()));
+    // (Each at least 27 bytes: a name's length, the RGB, the group, the point count and two empty
+    // handlers of 10; checked before the vector of them is made.)
+    s.polygons.resize(r.count(r.u32(), 27));
     for (auto& poly : s.polygons) {
         poly.name = readString8(r);
         for (auto& c : poly.ambientLight) {
@@ -120,10 +122,9 @@ void Polygons::write(ByteWriter& w) const
         w.u16(countOf<std::uint16_t>(poly.points.size(), "polygon points"));
         std::vector<std::uint8_t> ids; // one call for the whole list
         for (auto id : poly.points) {
-            for (int i = 0; i < 4; ++i) {
-                ids.push_back(static_cast<std::uint8_t>(id >> (8 * i)));
-            }
+            util::putU32(ids, id);
         }
+
         w.bytes(ids);
         writeScriptHandler(w, poly.playerEnter);
         writeScriptHandler(w, poly.monsterEnter);
@@ -143,7 +144,8 @@ GroupData GroupData::parse(std::span<const std::uint8_t> data)
     }
     // u32 count; per group: name (with its NUL inside the u8 length), u8 kind, i32 id, i32 member
     // count, then members as i32 ids or, for wall groups, grid points.
-    s.groups.resize(r.count(r.u32()));
+    // (Each at least 10 bytes: a name's length, the kind, the id and the member count.)
+    s.groups.resize(r.count(r.u32(), 10));
     for (auto& g : s.groups) {
         g.name = readString8(r);
         // The game's reader (mapRWGroupData) copies the length's bytes and never terminates

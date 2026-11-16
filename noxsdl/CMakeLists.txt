@@ -78,12 +78,14 @@ add_executable(noxsdl WIN32
     src/editor/session_panel.cpp
     src/editor/session_setup.cpp
     src/editor/thing_thumbnails.cpp
+    src/editor_glue.cpp
     src/effects.cpp
     src/effects_beams.cpp
     src/effects_enchant.cpp
     src/effects_rain.cpp
     src/effects_objects.cpp
     src/effects_puffs.cpp
+    src/game_cursor.cpp
     src/game_session.cpp
     src/game_windows.cpp
     src/gpu_atlas.cpp
@@ -106,6 +108,7 @@ add_executable(noxsdl WIN32
     src/light_cone.cpp
     src/lighting.cpp
     src/legal_screen.cpp
+    src/live_controls.cpp
     src/live_scene.cpp
     src/live_session.cpp
     src/local_host.cpp
@@ -143,6 +146,7 @@ add_executable(noxsdl WIN32
     src/server_options_advanced.cpp
     src/server_options_server.cpp
     src/sight.cpp
+    src/wall_grid.cpp
     src/spell_chant.cpp
     src/spellbook.cpp
     src/spell_limits.cpp
@@ -152,6 +156,7 @@ add_executable(noxsdl WIN32
     src/text_wrap.cpp
     src/typeface.cpp
     src/font_choice.cpp
+    src/frame.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/caudex_font.cpp
     src/test_drive.cpp
     src/thing_art.cpp

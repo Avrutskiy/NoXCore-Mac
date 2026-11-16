@@ -4,8 +4,7 @@
 //   list      servers named directly ("host" or "host:port"), e.g. from a servers file
 // Every server found is pinged with MSG_SERVER_DISCOVER (header 00 00, a token the server
 // echoes); the MSG_SERVER_INFO reply gives the round trip and fresh details (full name, current
-// players). Entries are merged by address and port. OpenNox's discovery does the same (its HTTP
-// lobby could be another source).
+// players). Entries are merged by address and port (an HTTP lobby could be another source).
 //
 // The game list's Network (LAN play) mode asks no XWIS at all (setXwisListing(false)): as the
 // game's refreshServerList, which in network mode only broadcasts the LAN query.
@@ -21,6 +20,7 @@
 #include "noxcore/net/udp_socket.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <random>
@@ -74,6 +74,8 @@ public:
         std::optional<net::Endpoint> lanQueryTo;
         /// The way to XWIS's chat server: servserv first (servserv.hpp; tests: loopback fakes).
         XwisRoute xwisRoute;
+        /// (Tests: a ping's send to `to` fails, as a network error's would, while this says so.)
+        std::function<bool(const net::Endpoint& to)> failSend;
     };
 
     explicit ServerBrowser(Options options);

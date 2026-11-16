@@ -81,7 +81,7 @@ inline constexpr std::uint32_t CaptureTheFlag = 0x20;
 inline constexpr std::uint32_t FlagBall = 0x40;
 inline constexpr std::uint32_t Chat = 0x80;
 inline constexpr std::uint32_t Arena = 0x100;
-inline constexpr std::uint32_t Coop = 0x200;      ///< (OpenNox's name) players' glyphs spare players
+inline constexpr std::uint32_t Coop = 0x200;      ///< (its usual name) players' glyphs spare players
 inline constexpr std::uint32_t Elimination = 0x400;
 inline constexpr std::uint32_t Solo = 0x800;      ///< the campaign (co-op)
 inline constexpr std::uint32_t Quest = 0x1000;
@@ -577,6 +577,9 @@ struct ServerObject {
     /// Made and not yet through the new things' pass (unitsNewAddToList, at a
     /// tick's end), which puts one with a COLLIDE in the motion.
     bool fresh = true;
+    /// Its type's INIT is GoldInit (the last INIT line: Gold, QuestGoldPile, QuestGoldChest), which
+    /// the new things' pass runs as it joins (runInit).
+    bool goldInit = false;
     // Health (HealthData; max 0: none), and what last hurt it, with what and when.
     std::uint16_t health = 0;
     std::uint16_t maxHealth = 0;
@@ -1647,9 +1650,12 @@ public:
     Line line(std::string_view label) const;
     /// What Str_GetString's pick among a line's variants draws (a stream of its own here).
     mutable std::minstd_rand stringRng{1};
-    /// The server's random stream (randInt's), for an object's INIT as it's made
-    /// (GoldInit's pile); null in a world with no server.
+    /// The server's random stream (randInt's), for an object's INIT as it joins the lists
+    /// (GoldInit's pile: runInit); null in a world with no server.
     std::minstd_rand* rng = nullptr;
+    /// The things whose INIT the new things' pass couldn't run for want of `rng` (World::load's
+    /// world), in that pass's order: the server runs them once it's set (runOwedInits).
+    std::vector<std::uint32_t> initsOwed;
     /// A line to one player (SrvNet_SendTextMessageToUnit: MSG_TEXT_MESSAGE 0xA8 from
     /// no one), the string table's text for `label`.
     void textTo(const ServerObject& player, std::string_view label, std::optional<std::u16string_view> arg = std::nullopt);
@@ -1898,9 +1904,8 @@ public:
     std::uint32_t chosenMode = GameFlag::Arena;
     /// The flags on the map.
     int flagCount = 0;
-    /// The dead come back by themselves, half a second on (OpenNox's misnamed
-    /// ruleSetNoRespawn; read by server_doPlayersAutoRespawn, not in a
-    /// quest): on for elimination, a host's option; and the host's setting that keeps it from map
+    /// The dead come back by themselves, half a second on (read by server_doPlayersAutoRespawn,
+    /// not in a quest): on for elimination, a host's option; and the host's setting that keeps it from map
     /// to map (a game settings bit).
     bool autoRespawn = false;
     bool keepAutoRespawn = false;
@@ -2340,8 +2345,6 @@ public:
     /// .plr's things), and those are kept by number for this. 0 names none. (A group's members, a
     /// mover's thing, a map object's net code: bit 15 and the number.)
     ServerObject* byMapNumber(MapNumber number);
-    /// Its map number given after it was put in the world (kept for byMapNumber).
-    void setMapNumber(ServerObject& o, MapNumber number);
     /// A client's code for a thing as packetDynamicUnitCode, then Obj_GetByNetCode, take it: with
     /// bit 15 a map object's, by its map number (byMapNumber); else the thing it's the code of.
     ServerObject* byPacketCode(NetCode code);
@@ -2649,6 +2652,15 @@ ServerObject objectFromRecord(World& world, const map::ObjectXfer& xfer, std::st
                               const things::ModifierDb* modifiers);
 /// A type's flags as the type reader leaves them (FLAGS, ENABLED, NO_COLLIDE without a COLLIDE).
 std::uint32_t typeFlags(const things::ThingDef& t);
+/// Its type's INIT function as the game calls it: as a new thing joins the object lists, last of
+/// that (the new things' pass, unitsNewAddToList: after its maker's work, newest first), and
+/// straight after an item made to be handed over (playerRespawnItem: Items::give). Of the INITs
+/// ours runs, GoldInit's is here: a pile with no gold yet gets an amount by the players' mean
+/// experience (two draws). (The others' parts run as the thing is made: describe.) Without a
+/// random stream (World::load's world) it's owed (World::initsOwed) till the server has one.
+void runInit(World& w, ServerObject& o);
+/// The INITs a world with no random stream owed (World::load's pass), in that pass's order.
+void runOwedInits(World& w);
 /// A client-only type (not a missile, IMMOBILE, not VISIBLE_ENABLE, NO_COLLIDE without SHADOW
 /// in its typeFlags): the clients load its things from their own map; the
 /// server frees them at the load (servMapLoadPlaceObj).

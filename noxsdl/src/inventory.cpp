@@ -7,10 +7,12 @@
 #include "player_art.hpp"
 #include "repair_shade.hpp"
 
+#include "noxcore/client/text_fields.hpp"
 #include "noxcore/things/object_class.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace noxsdl {
 
@@ -233,23 +235,11 @@ constexpr std::array<ItemPower, 6> kItemPowers{{
 }};
 
 
-/// Formats "%d" / "%s" / "%.2f" in order from `args` (the string table's own formats).
-std::string format(std::string f, std::initializer_list<std::string> args)
+/// Formats "%d" / "%s" / "%.2f" in order from `args` (the string table's own formats): each %
+/// through the next letter (text_fields.hpp's replaceThroughLetter).
+std::string format(std::string f, std::initializer_list<std::string_view> args)
 {
-    auto it = args.begin();
-    for (std::size_t at = f.find('%'); at != std::string::npos && it != args.end(); at = f.find('%', at)) {
-        std::size_t end = at + 1;
-        while (end < f.size() && !std::isalpha(static_cast<unsigned char>(f[end]))) {
-            ++end;
-        }
-        if (end >= f.size()) {
-            break;
-        }
-        f.replace(at, end - at + 1, *it);
-        at += it->size();
-        ++it;
-    }
-    return f;
+    return nox::client::fields::replaceThroughLetter(std::move(f), args);
 }
 
 std::string fixed2(float v)
@@ -271,10 +261,6 @@ Inventory::Inventory(const nox::things::ThingDb& things, ThingArt& art, const no
       }),
       bottles_(BottleSlots::typesIn(things))
 {
-    // Index thing.db's images by name for drawNamed.
-    for (const auto& i : things_.images) {
-        images_.emplace(i.name, &i);
-    }
     bottles_.pick(grid_); // (the meters made: the empty grid's)
 }
 
@@ -287,8 +273,7 @@ bool Inventory::food(std::uint16_t typeId) const
 // A thing.db image by name; nullptr if there is none.
 const nox::things::ImageDef* Inventory::image(const std::string& name) const
 {
-    const auto it = images_.find(name);
-    return it == images_.end() ? nullptr : it->second;
+    return things_.findImage(name); // (each name's first image, as thing.bin lists them)
 }
 
 // A sprite at game pixel (gx, gy) plus its own offset, scaled by s; tinted when `materials` is given.

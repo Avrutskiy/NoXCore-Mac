@@ -112,9 +112,14 @@ public:
     /// The trigger's (self's) object-variable words, by word offset (function 0's layout): 0
     /// until written. GAME.EXE never allocates them, so it faults where these are used
     /// (OB-210); NoX Core keeps them per object, for its own scripts. Never saved (nor are
-    /// they in the exe's ScriptData).
+    /// they in the exe's ScriptData). A store past objectVarWords() is lost (a script's own
+    /// arithmetic could name any word up to 2^31, gigabytes per object); one at it is kept, as the
+    /// game's element store one past an array's end writes the next word (OB-211).
     std::uint32_t objectVar(std::int32_t word) override;
     void setObjectVar(std::int32_t word, std::uint32_t value) override;
+    /// The object-variable words the script declares (function 0's, at most
+    /// script::kMaxLocalWords: ScriptFile::parse refuses more).
+    std::size_t objectVarWords() const;
     /// Every object's object-variable words, by extent (only objects that had one written).
     const std::map<std::uint32_t, std::vector<std::uint32_t>>& objectVars() const noexcept { return objectVars_; }
 
@@ -201,6 +206,16 @@ private:
     /// One of the creature / object builtins run (its result as builtin()'s), or -1 when `id`
     /// isn't one of them.
     int creatureBuiltin(std::uint32_t id, script::Vm& vm);
+    // creatureBuiltin's groups (script_builtins_creatures.cpp): facing, the AI's levels and
+    // orders, health and enchantments, the tests, items and gold, spells, the body's state.
+    int creatureFacing(std::uint32_t id, script::Vm& vm);
+    int creatureLevels(std::uint32_t id, script::Vm& vm);
+    int creatureOrders(std::uint32_t id, script::Vm& vm);
+    int creatureHealth(std::uint32_t id, script::Vm& vm);
+    int creatureTests(std::uint32_t id, script::Vm& vm);
+    int creatureItems(std::uint32_t id, script::Vm& vm);
+    int creatureSpells(std::uint32_t id, script::Vm& vm);
+    int creatureState(std::uint32_t id, script::Vm& vm);
     const things::ModifierDb* modifiers_ = nullptr;
     std::minstd_rand creatureRng_{1};     ///< what their fights, spells and drops draw
     std::uint32_t pickupFrame_ = 0;       ///< Pickup's co-op counts' frame
@@ -217,6 +232,16 @@ private:
     /// (ox, oy) added.
     void effect(std::string_view name, float x1, float y1, float x2, float y2, int ox, int oy);
     std::string lookupName(std::string_view name) const;
+
+    // gameBuiltin's groups (script_host.cpp), each a group of the game's builtins.
+    int gameWalls(std::uint32_t id, script::Vm& vm);
+    int gameValues(std::uint32_t id, script::Vm& vm);
+    int gameObjects(std::uint32_t id, script::Vm& vm);
+    int gameOwners(std::uint32_t id, script::Vm& vm);
+    int gameWaypoints(std::uint32_t id, script::Vm& vm);
+    int gameMessages(std::uint32_t id, script::Vm& vm);
+    int gameQueries(std::uint32_t id, script::Vm& vm);
+    int gamePlayers(std::uint32_t id, script::Vm& vm);
 
     // Dialog, the journal (script_builtins_dialog.cpp): SetDialog, CancelDialog,
     // StoryPic, TellStory, StartDialog, GetAnswer, IsTalking, JournalEntry / Delete / Edit.

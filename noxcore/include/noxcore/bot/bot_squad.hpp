@@ -108,7 +108,7 @@ struct SquadPerson {
     bool observer = false; ///< spectating
     int kills = 0;
     std::uint16_t pingMs = 0;
-    std::string account;   ///< their XWIS login, "" if the game gives none (OpenNox's)
+    std::string account;   ///< their XWIS login, "" if the game gives none (some other clients' games)
     /// How long a bot has seen them standing in one place (0 while they move, or while no bot
     /// has had them in view lately: out of sight isn't idle).
     std::uint32_t idleMs = 0;
@@ -146,8 +146,6 @@ public:
     /// for them (voice()) stays whatever its class; of the rest, those of a class there are now
     /// too many of leave, newest first; those missing join as there's room.
     void setWanted(const std::vector<std::uint8_t>& classes, std::uint32_t nowMs);
-    /// The classes wanted now, oldest first.
-    const std::vector<std::uint8_t>& wantedClasses() const noexcept { return wanted_; }
     /// The difficulties bots join at from now on; those in of another (but the voice) leave, to
     /// come back as one of these.
     void setTiers(Tier minTier, Tier maxTier, std::uint32_t nowMs);
@@ -201,6 +199,8 @@ public:
     const std::vector<SquadPerson>& humans() const noexcept { return humans_; }
     /// What happened since the last call: joins, notices, leaving.
     std::vector<std::string> takeLog();
+    /// A line of the caller's into that log (the program running the squad: an error out of tick).
+    void note(std::string line) { log(std::move(line)); }
     /// The game's chat since the last call, heard by one bot (each bot hears the same).
     std::vector<ChatLine> takeChat() { return std::exchange(chat_, {}); }
 
@@ -236,7 +236,9 @@ private:
     void announce(const std::string& why, std::uint32_t nowMs);
     void log(std::string line);
     /// A new seat for a bot of `playerClass`, joining at `atMs` (a name from one gone, if any).
-    void addSeat(std::uint8_t playerClass, std::uint32_t atMs);
+    /// False (logged once until one opens) if its sockets couldn't be opened: no seat added.
+    bool addSeat(std::uint8_t playerClass, std::uint32_t atMs);
+    bool openFailNoted_ = false; ///< addSeat's sockets failed to open, and that was logged
     /// Keeps the wanted count as far as room allows: one bot out when people need the place,
     /// one in (a missing class) when there's room again, kBalanceMs apart.
     void balance(std::uint32_t nowMs);
@@ -257,7 +259,6 @@ private:
     const ItemKinds& kinds_;
     std::mt19937 rng_;
     std::vector<std::unique_ptr<Seat>> seats_;
-    std::set<std::string> names_;
     std::vector<std::string> log_;
     std::vector<ChatLine> chat_;
     /// What our bots said lately: the server's echo of it isn't shown twice.
@@ -332,6 +333,15 @@ private:
     /// Those who struggle (struggles()) now, by netCode; records old or of people gone dropped.
     std::vector<std::uint16_t> strugglers(std::uint32_t nowMs);
     void nagHost(std::uint32_t nowMs);
+    // tick()'s steps (bot_squad.cpp), in its order.
+    const Seat* chooseListener();
+    void sendOut(Seat& s, net::UdpSocket& socket, std::span<const std::uint8_t> bytes);
+    void noteFailed(Seat& s, std::uint32_t nowMs);
+    bool startSeat(Seat& s, std::uint32_t nowMs);
+    void seatEvents(Seat& s, const Seat* listener, std::uint32_t nowMs);
+    void listHumans();
+    void noteStillness(std::uint32_t nowMs);
+    void countPeople(std::uint32_t nowMs);
     std::uint32_t leaveAt_ = 0; ///< when they all go, once the reason's been said
     bool quitting_ = false;
     std::uint32_t lastTick_ = 0;

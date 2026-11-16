@@ -93,14 +93,6 @@ SDL_FPoint tileCorner(int gx, int gy)
     return odd ? SDL_FPoint{cx + kOddX, cy + kOddY} : SDL_FPoint{cx + kOddY, cy + kOddX};
 }
 
-/// An object's flags as the client has them once loaded: a new drawable starts enabled
-/// (Cli_CreateDrawableAt sets 0x1000000) and only a header with details replaces that
-/// (spriteLoadFromMap). Most maps' flames and torches have no details.
-std::uint32_t objectFlags(const nox::map::ObjectHeader& header)
-{
-    return header.details ? header.details->flags : kObjectEnabled;
-}
-
 } // namespace
 
 MapView::MapView(const nox::map::MapFile& map, const nox::things::ThingDb& things, ThingArt& art,
@@ -667,50 +659,14 @@ void MapView::setWallState(const std::set<std::uint16_t>& destroyed, const std::
                            const std::set<std::uint16_t>& closed,
                            const std::vector<std::pair<std::pair<int, int>, nox::map::Wall>>& magic)
 {
-    // The cells of broken walls and open secret walls; Wall-spell walls replace whatever the map has in their cell.
-    std::set<std::uint16_t> gone;
-    for (const auto id : destroyed) {
-        if (id < breakable_.size()) {
-            gone.insert(breakable_[id]);
-        }
-    }
-    for (std::size_t id = 0; id < secret_.size(); ++id) {
-        const auto key = static_cast<std::uint16_t>(id);
-        // Open when the server says so, or when the map starts it open and the server hasn't closed it.
-        const bool open = opened.contains(key) || (secret_[id].second && !closed.contains(key));
-        if (open) {
-            gone.insert(secret_[id].first);
-        }
-    }
-    std::set<std::uint16_t> raised;
-    for (const auto& [cell, wall] : magic) {
-        raised.insert(wallKey(cell.first, cell.second));
-    }
-    walls_.clear();
-    for (const auto& w : mapWalls_) {
-        const auto key = wallKey(w.x, w.y);
-        if (!gone.contains(key) && !raised.contains(key)) {
-            walls_.push_back(w);
-        }
-    }
-    for (const auto& [cell, wall] : magic) {
-        auto w = wall;
-        w.x = static_cast<std::uint8_t>(cell.first);
-        w.y = static_cast<std::uint8_t>(cell.second);
-        walls_.push_back(w);
-    }
-    // The breakable walls still standing as the map has them (a Wall-spell wall raised in a broken
-    // one's cell is a new wall: not breakable).
-    breakableStanding_.clear();
-    for (const auto key : breakable_) {
-        if (!gone.contains(key) && !raised.contains(key)) {
-            breakableStanding_.insert(key);
-        }
-    }
+    // The walls standing (wall_grid.hpp's standingWalls: the tests check the grid on its list).
+    standingWalls(mapWalls_, breakable_, secret_, destroyed, opened, closed, magic, walls_, breakableStanding_);
     wallByKey_.clear();
     for (std::size_t i = 0; i < walls_.size(); ++i) {
         wallByKey_[wallKey(walls_[i].x, walls_[i].y)] = i; // (a later wall in a cell over an earlier)
     }
+    // (The only place walls_ changes: a map loaded, setWalls, and every change the server sends.)
+    wallGrid_.build(walls_);
 }
 
 void MapView::setTile(int gx, int gy, const nox::map::FloorTile* tile)
@@ -1060,7 +1016,10 @@ void MapView::drawScene(SDL_Renderer* renderer, const Camera& camera, SpriteCach
         return frontWall(w, camera.x, camera.y);
     };
     // Walls in view: see-through ones sorted with the objects; solid ones split into front and back.
-    for (const auto& w : walls_) {
+    // (Those near the view from the wall grid: the walls a walk of them all keeps, in its order.)
+    wallGrid_.findAround(camera.left(), camera.top(), camera.right(), camera.bottom(), kMargin, wallsNear_);
+    for (const std::uint32_t index : wallsNear_) {
+        const auto& w = walls_[index];
         if (!visible(w.x * kWallCell, w.y * kWallCell)) {
             continue;
         }

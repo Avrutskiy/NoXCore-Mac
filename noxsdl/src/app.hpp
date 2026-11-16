@@ -8,10 +8,14 @@
 //   game_session.cpp      a game joined: the live session, the game's windows, chat and saves
 //   quickbar.cpp          the spell bars, traps and the award flight, as played
 //   live_scene.cpp        the world's drawables as the scene draws them, lights and sounds
+//   live_controls.cpp     what the bound controls do in a game, and picking up
 //   overlays.cpp          what's drawn over the world: names, bars, bubbles, banner, tooltips
-//   test_drive.cpp        the tests' fake screens and scripted input
-// main.cpp has SDL's callbacks, the frame, the input's routing and the map editor's glue;
-// command_line.hpp the command line's reading.
+//   test_drive.cpp      the tests' fake screens and scripted input
+//   frame.cpp             the frame's way to the screen: targets, gamma, present, screenshots
+//   game_cursor.cpp       the game's cursor: which one this frame shows, and its draw
+//   editor_glue.cpp      the map editor's glue: opening it, its play-test and edit sessions
+// main.cpp has SDL's callbacks, the frame and the input's routing; command_line.hpp the
+// command line's reading.
 #pragma once
 
 #include <SDL3/SDL.h>
@@ -197,8 +201,9 @@ struct App {
     float bloomStrength = 0.2f;          ///< --bloom N
     std::unique_ptr<ThingArt> art;
     /// The types the scene names itself (live_scene.cpp: NewPlayer for NPCs, the skull and crown
-    /// over a player, the carried flag), looked up in `art` once each.
-    ThingArt::Named newPlayerArt, skullArt, crownArt, flagArt;
+    /// over a player, the carried flag, the Glyph the cursor's pick treats apart; main.cpp's
+    /// chooseCursor: the Mimic, asleep), looked up in `art` once each.
+    ThingArt::Named newPlayerArt, skullArt, crownArt, flagArt, glyphArt, mimicArt;
     nox::map::MapFile map;
     std::unique_ptr<MapView> view;
     Camera camera;
@@ -512,6 +517,13 @@ struct App {
     std::uint32_t lastSlotFrame = 0;
     int barFlash = -1;                  ///< the set arrow or all-sets button just clicked
     std::uint64_t barFlashMs = 0;
+    /// SelectSpellSet's taps (client_spellSetSelect, liveControl): the last tap's time (0: none yet)
+    /// and the set it chose; a tap within half a second of the last picks the next.
+    std::uint64_t spellSetTapMs = 0;
+    int spellSetTapped = 0;
+    /// Taunt, Laugh and Point (MSG_SOCIAL, liveControl): when each was last sent, for the game's
+    /// limit of one a second (a laugh every two: checkKeybTimeout).
+    std::map<nox::client::HeadlessClient::Social, std::uint64_t> socialSentMs;
     /// The trap / bomber bar (casters): the tray open, the right end showing the trap or bomber,
     /// its slide off and back on when the Glyph is learned (quickbarAddTrap: one game pixel
     /// a frame down past the screen's bottom, then up), the button's lit moment.
@@ -903,6 +915,14 @@ void drawChatBubbles(App& app, std::uint32_t frame);
 std::string liveTooltip(App& app);
 void drawTooltip(App& app, bool below = false);
 
+// live_controls.cpp
+/// Picks up `netCode` (MSG_TRY_GET) unless there's no room for it (CliNet_SendPickup).
+void tryPickup(App& app, std::uint16_t netCode);
+/// Live: what a control does when its key is pressed; whether it did anything.
+bool liveControl(App& app, std::string_view control);
+/// The controls a key or button press fired; whether there were any.
+bool liveControls(App& app, const std::vector<std::string>& controls);
+
 // test_drive.cpp
 void pickupTest(App& app);
 void fakeScreen(App& app, int which);
@@ -911,5 +931,38 @@ void pushKeyTap(SDL_Keycode key, SDL_Scancode scancode);
 SDL_Event scriptedKey(const App::ScriptedMouse& m);
 SDL_Event scriptedMouseEvent(const App::ScriptedMouse& m);
 void runGameTests(App& app, bool inGame);
+
+// frame.cpp
+bool saveScreenshot(App& app);
+void beginFrame(App& app);
+void endFrame(App& app);
+void present(App& app);
+SDL_AppResult showMovie(App& app, bool shotReady);
+
+// game_cursor.cpp
+/// The cursor update's gate on its world part, as a pick::Situation (pick::worldSkipped's fields).
+pick::Situation worldGate(App& app);
+void chooseCursor(App& app, bool inGame);
+void drawCursor(App& app, CursorType type, float scale);
+
+// editor_glue.cpp
+bool gameInPanel(const App& app);
+void openEditor(App& app, const std::string& map);
+void editorMouse(App& app);
+void playTestJump(App& app);
+void capturePlayTest(App& app, bool on);
+void playTestLayout(App& app);
+void endPlayTest(App& app);
+void playTestToEditor(App& app);
+void showEditSessionSetup(App& app, bool closeOnCancel = false);
+std::string hostEditSession(App& app, const editor::SessionSetup& setup, std::uint16_t port, bool listed);
+void sessionToEditor(App& app);
+void sessionToGame(App& app, bool moveToCamera = true, std::optional<std::pair<float, float>> at = std::nullopt);
+void checkSession(App& app);
+void updatePending(App& app);
+void detachEditor(App& app);
+void endEditorGame(App& app);
+SDL_AppResult toMainMenu(App& app);
+SDL_AppResult editorFrame(App& app);
 
 } // namespace noxsdl

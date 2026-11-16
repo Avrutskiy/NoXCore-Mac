@@ -164,13 +164,17 @@ void drawHoverRing(App& app)
     // The game's three one-pixel circles (video_drawCircle at r - 1, r, r + 1), drawn
     // at 640 x 480 and scaled up, run together into one thick line; drawn here as that line, a
     // band 3 game pixels wide: the solid middle pixel between the half see-through outer ones.
+    // (The bands' vertex and index lists are kept from frame to frame, emptied for each band: a
+    // hover allocates nothing once they've grown to the biggest ring.)
+    static std::vector<SDL_Vertex> v;
+    static std::vector<int> idx;
     const auto band = [&](float inner, float outer, std::uint8_t alpha) {
         const float ri = inner * app.camera.zoom;
         const float ro = outer * app.camera.zoom;
         const int n = std::clamp(static_cast<int>(ro * 0.75f), 32, 256);
         const SDL_FColor fc{c.r / 255.0f, c.g / 255.0f, c.b / 255.0f, alpha / 255.0f};
-        std::vector<SDL_Vertex> v;
-        std::vector<int> idx;
+        v.clear();
+        idx.clear();
         v.reserve(static_cast<std::size_t>(2 * (n + 1)));
         idx.reserve(static_cast<std::size_t>(6 * n));
         // A strip of quads round the circle: an inner and an outer vertex each step, two triangles to the next.
@@ -1029,9 +1033,8 @@ std::string liveTooltip(App& app)
     if (auto t = app.hud->tooltip(world, client.netCode(), quickbarState(app), m.x, m.y, w, h); !t.empty()) {
         return t;
     }
-    // (Not under a cinematic's widescreen: cursorUpdate skips the world there.)
-    if (app.cursorHovered && !(app.inventory && app.inventory->dragging()) &&
-        !(app.cinematics && app.cinematics->wideScreen())) {
+    // (Not under a cinematic's widescreen, paused or dying: cursorUpdate skips the world there.)
+    if (app.cursorHovered && !(app.inventory && app.inventory->dragging()) && !pick::worldSkipped(worldGate(app))) {
         if (const auto* d = world.drawable(*app.cursorHovered)) {
             const TypeArt* a = app.art->get(d->typeId);
             if (a && (a->classes & nox::things::ObjectClass::Pickup)) {

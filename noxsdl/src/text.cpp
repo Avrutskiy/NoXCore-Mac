@@ -266,8 +266,8 @@ void Font::drawGameText(std::string_view utf8, float gx, float gy, float scale, 
 GameFonts::GameFonts(SDL_Renderer* renderer, const std::filesystem::path& gameDir, std::filesystem::path fontDir)
     : renderer_(renderer), fontDir_(std::move(fontDir))
 {
-    // The plain face: the game folder's default.ttf / default.otf, the names OpenNox looks for when
-    // it swaps a TrueType font in for default.fnt, else Caudex Bold.
+    // The plain face: the game folder's default.ttf / default.otf, the usual names for a TrueType
+    // font swapped in for default.fnt, else Caudex Bold.
     for (const char* file : {"default.ttf", "default.otf"}) {
         const auto path = gameDir / file;
         std::error_code ec;
@@ -275,11 +275,11 @@ GameFonts::GameFonts(SDL_Renderer* renderer, const std::filesystem::path& gameDi
             continue;
         }
         try {
-            plain_ = make(nox::readFileBytes(path), path.string());
-            SDL_Log("font: %s in place of Caudex Bold", path.string().c_str());
+            plain_ = make(nox::readFileBytes(path), nox::pathUtf8(path));
+            SDL_Log("font: %s in place of Caudex Bold", nox::pathUtf8(path).c_str());
             break;
         } catch (const std::exception& ex) {
-            SDL_Log("%s: %s (using Caudex Bold)", path.string().c_str(), ex.what());
+            SDL_Log("%s: %s (using Caudex Bold)", nox::pathUtf8(path).c_str(), ex.what());
         }
     }
     if (!plain_.face) {
@@ -298,7 +298,7 @@ GameFonts::GameFonts(SDL_Renderer* renderer, const std::filesystem::path& gameDi
     }
     if (!missing.empty()) {
         SDL_Log("fonts: no %s in %s (Original Style Fonts draws in Caudex Bold where its file is missing)", missing.c_str(),
-                fontDir_.string().c_str());
+                nox::pathUtf8(fontDir_).c_str());
     }
 }
 
@@ -323,10 +323,10 @@ bool GameFonts::loadNox(FontFace face)
     }
     const auto path = fontDir_ / noxFontFile(face);
     try {
-        nox_[i] = make(nox::readFileBytes(path), path.filename().string());
+        nox_[i] = make(nox::readFileBytes(path), nox::pathUtf8(path.filename()));
         return true;
     } catch (const std::exception& ex) {
-        SDL_Log("%s: %s (not used)", path.string().c_str(), ex.what());
+        SDL_Log("%s: %s (not used)", nox::pathUtf8(path).c_str(), ex.what());
         files_[i] = false; // (not tried again)
         return false;
     }
