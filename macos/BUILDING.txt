@@ -8,6 +8,9 @@ glslang and SPIRV-Cross. The deployment target follows libc++ floating-point fro
   cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake
   cmake --build build/macos-arm64 --target noxsdl_bundle -j 4
 
+Set macos/version.txt to the intended release version before building the release artifact.
+The macOS workflow checks both version fields in the signed app and compares release tags.
+
 Packaging verifies a fresh staged bundle before replacing the previous build, so
 removed resources do not survive a rebuild. Keep user content outside the build bundle.
 

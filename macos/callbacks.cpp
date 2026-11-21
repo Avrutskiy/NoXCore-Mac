@@ -33,6 +33,12 @@ extern "C" SDL_AppResult SDLCALL MacAppEvent(void* state, SDL_Event* event)
     if (!state || !SDL_IsMainThread()) return SDL_AppEvent(state, event);
     auto& app = *static_cast<noxsdl::App*>(state);
     if (!noxsdl::macos::filterPointerEvent(app.window, *event)) return SDL_APP_CONTINUE;
+    if (event->type == SDL_EVENT_MOUSE_WHEEL && SDL_GetWindowFromEvent(event) == app.window &&
+        (!editorOwnsPointer(app) || (noxsdl::gameInPanel(app) && app.playTestCaptured))) {
+        // The game consumes one step per event. SDL accumulates fractional trackpad motion.
+        if (event->wheel.integer_y == 0) return SDL_APP_CONTINUE;
+        event->wheel.y = static_cast<float>(event->wheel.integer_y);
+    }
     const SDL_AppResult result = SDL_AppEvent(state, event);
     releaseOnHandoff(app); // An event can hand the game back before the next frame.
     return result;

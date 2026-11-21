@@ -40,7 +40,9 @@ void updatePointerArea(SDL_Window* window, const SDL_FRect* renderArea, float de
         }
     }
     // The embedded play view owns its own rect; event clamping belongs only to this backend's rect.
-    SDL_SetBooleanProperty(SDL_GetWindowProperties(window), pointerAreaOwned, area != nullptr);
+    if (ownsPointerArea(window) != (area != nullptr)) {
+        SDL_SetBooleanProperty(SDL_GetWindowProperties(window), pointerAreaOwned, area != nullptr);
+    }
     if (area && SDL_GetMouseFocus() == window && SDL_GetKeyboardFocus() == window) {
         // SDL can retain an old position past a newly shrunken right/bottom edge.
         float x, y;
