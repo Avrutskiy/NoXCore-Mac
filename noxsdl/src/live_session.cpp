@@ -5,6 +5,7 @@
 #include "noxcore/content/content_pack.hpp"
 #include "noxcore/lobby/extended.hpp"
 #include "noxcore/net/transport.hpp"
+#include "noxcore/strings/l10n.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -161,7 +162,12 @@ LiveSession::LiveSession(const std::string& hostAndPort, nox::client::PlayerProf
         game_.sendTo(server_, query);
         // (A host the game list saw as stock, or any host when only our level is new: the join
         // at once, never slower than before: joinWaits.)
-        if (joinWaits(types != 0, identifyFirst, knownStock)) {
+        // (On an install whose text isn't Latin-1's, a Russian fan translation's, the join waits
+        // too: our names and lines go to a recoding host of kUnicodeTextLevel as Unicode
+        // (lobby::unicodeTextWith), to any other in
+        // our convention, and which it is must be known before the join carries our name. A stock
+        // host never answers: then it goes after kWaitMs, in our convention.)
+        if (joinWaits(types != 0, identifyFirst, knownStock) || (!knownStock && !nox::strings::wireText().plain())) {
             typesQuery_ = query; // (the join waits for its answer: update)
             wait_.begin(nowMs());
             return;
@@ -174,14 +180,15 @@ LiveSession::LiveSession(const std::string& hostAndPort, nox::client::PlayerProf
 std::vector<std::uint8_t> LiveSession::query(std::uint64_t realm)
 {
     // Our script mode UI's features (API 2 with its assets too), our content packs' added object
-    // types, our client level, and our secret for the host's client key realm (made the first time
-    // we meet it: client_keys.hpp).
+    // types, our client level, our secret for the host's client key realm (made the first time
+    // we meet it: client_keys.hpp), and our UI language (a script mode's texts come in it).
     const auto secret = keyring_.secretFor(realm);
     if (secret) {
         keyedRealm_ = realm;
     }
     return nox::lobby::encodeExtendedQuery(nowMs(), nox::lobby::ClientFeature::ModeUi | nox::lobby::ClientFeature::ModeUi2,
-                                           nox::content::newThingTypes().hash, nox::lobby::kClientLevel, secret);
+                                           nox::content::newThingTypes().hash, nox::lobby::kClientLevel, secret,
+                                           nox::l10n::language());
 }
 
 void LiveSession::update()
@@ -222,6 +229,13 @@ void LiveSession::update()
                 }
                 extended_ = reply->server;
                 client_.setFreshInput(true); // (our facing and moves as they change: its next frame has them)
+                // Our text as real Unicode both ways with a host that takes it and recodes its
+                // stock clients' (lobby::unicodeTextWith), told before our join. At a Latin-1 host
+                // our own convention, so a Russian install's stock players there read us and we
+                // them, as before.
+                if (!started_) {
+                    client_.setUnicodeLink(nox::lobby::unicodeTextWith(reply->server));
+                }
                 // A host with a client key realm our query had no secret for: the query again with
                 // it, before our connect (at a listed one the join waits for this answer).
                 if (reply->server.realm != 0 && reply->server.realm != keyedRealm_ && !SDL_getenv("NOX_STOCK_STREAM")) {

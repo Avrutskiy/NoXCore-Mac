@@ -110,6 +110,13 @@ struct Sprite {
 /// and alpha modulation and blend mode. Use it (or SpriteCache::render) for every sprite draw.
 void drawSprite(SDL_Renderer* renderer, const Sprite& sprite, const SDL_FRect* src, const SDL_FRect& dst);
 
+/// (UI API 6: nox.gameImage) The video.bag index of one of the game's pictures a mod's UI names:
+/// `index` itself (index >= 0), else thing.bin's named image `name`, its still (frame 0 alone) or
+/// its animation's frame `frame`; -1: none (no such image or frame, or past video.bag's images).
+/// The game's UI and the map editor's preview both look them up here.
+std::int32_t gamePictureIndex(const nox::things::ThingDb& things, SpriteCache& sprites, std::string_view name, int frame,
+                              std::int32_t index = -1);
+
 class SpriteCache {
     struct Entry; // (below)
 
@@ -264,6 +271,8 @@ public:
     void setHolding(bool holding) { holding_ = holding; }
 
     std::size_t loaded() const { return sprites_.size(); }
+    /// How many images video.bag has (their indexes 0 to this less one).
+    std::size_t bagImages() const { return bag_.images().size(); }
     /// Whether get(index) would hand out what's made already (nothing read or made), and the same
     /// for composite(key): MapView's make budget (setFloorMakeBudget) skips what isn't.
     bool cached(std::int32_t index) const { return sprites_.contains(index); }
@@ -311,12 +320,22 @@ public:
     /// Images from this pack from now on (nullptr: video.bag's again). Drops every texture made
     /// so far, so call it between frames. With the pack's `path`, its HD images are decoded on
     /// worker threads (each opens the file again); without, on the drawing thread as they're asked.
-    void setPack(std::unique_ptr<nox::video::ImagePackReader> pack, const std::filesystem::path& path = {});
+    /// `checkSources` (openPack's answer): the game's video.idx isn't the one the pack was made
+    /// from, so each slot's source key is held against the game's image there, once, and a slot
+    /// whose image the game has another of (a translation's redrawn menu title...) is drawn from
+    /// video.bag.
+    void setPack(std::unique_ptr<nox::video::ImagePackReader> pack, const std::filesystem::path& path = {},
+                 bool checkSources = false);
     bool usingPack() const { return pack_ != nullptr; }
     /// Checks a pack against the game's video.idx (the CRC it was built from) and opens it;
-    /// nullptr, with the reason logged, if it can't be used.
+    /// nullptr, with the reason logged, if it can't be used. Another video.idx's pack is used only
+    /// when its slots carry source keys (image_pack.hpp), and then `checkSources` is set.
     static std::unique_ptr<nox::video::ImagePackReader> openPack(const std::filesystem::path& pack,
-                                                                  const std::filesystem::path& videoIdx);
+                                                                  const std::filesystem::path& videoIdx,
+                                                                  bool* checkSources = nullptr);
+    /// The slots kept from video.bag because the game's image differs from the one the pack's was
+    /// made from (setPack's check).
+    std::size_t sourcesDiffering() const { return sourcesDiffering_; }
 
 private:
     /// A made sprite (or one that couldn't be: nullopt), where it lives and when it was last
@@ -420,8 +439,14 @@ private:
     SDL_GPUShader* splitShader_ = nullptr;
     SDL_GPURenderState* pendingState_ = nullptr; ///< setPendingShader
     std::unique_ptr<nox::video::ImagePackReader> pack_;
-    /// The pack's HD images drawn from the originals all the same (hd_kept_originals.hpp).
-    std::vector<std::int32_t> keptOriginal_;
+    /// By slot: the pack's images drawn from the originals all the same (hd_kept_originals.hpp,
+    /// and setPack's source check); empty when none.
+    std::vector<bool> keptOriginal_;
+    std::size_t sourcesDiffering_ = 0;
+    bool keptOriginal(std::int32_t index) const
+    {
+        return static_cast<std::size_t>(index) < keptOriginal_.size() && keptOriginal_[static_cast<std::size_t>(index)];
+    }
     /// The BC7 pages (a pack with kCodecBc7 entries on the GPU renderer with BC7), else null.
     std::unique_ptr<GpuAtlas> atlas_;
     bool placeholders_ = false; ///< --hd-placeholders

@@ -270,6 +270,15 @@ struct PlayerControl {
     /// (noxcpp: a stock player a NoX Core-only mode holds out, GameHost::Options::stockRefusal)
     /// Action never brings it in, nor a quest's start or a map's change; never sent.
     bool heldOut = false;
+    /// (noxcpp: a script mode's, nox.observe) heldOut set by the mode, not the host: both cleared
+    /// as it leaves watching by any path (leaveObserver) and at the mode's end; the host's own
+    /// hold (heldOut alone) is kept through them. Never sent.
+    bool modHeld = false;
+    /// (noxcpp: a script mode's, nox.camera / nox.observe) Its camera held by the mode: while it
+    /// watches, its MoveForward and Jump leave the camera alone and Action never moves it, and a
+    /// goObserver tells it nothing and leaves the camera be. Off as it leaves watching
+    /// (leaveObserver), by nox.camera(unit, nil) and at the mode's end; never sent.
+    bool modCamera = false;
     float camX = 0;
     float camY = 0;
     ObjectRef cameraFollow;
@@ -1666,6 +1675,16 @@ public:
     /// counts the end too).
     static std::vector<std::uint8_t> textMessage(std::u16string_view text, std::uint8_t flags);
     static constexpr std::size_t kMaxTextMessage = 254;
+    /// noxcpp: the text a message carries for the players, recoded for a stock client of a host
+    /// whose text convention isn't Latin-1 (a Russian fan translation's install: `text`; messages
+    /// are made in Unicode, and NoX Core clients of kUnicodeTextLevel take them so): MSG_TEXT_MESSAGE's
+    /// (but a string id's: 8-bit, then, when every unit fits a byte, else UTF-16), MSG_NEW_PLAYER's
+    /// name, MSG_TEAM_MSG 0's and 4's team name, MSG_TRADE 0x0C's and 0x0D's partner and
+    /// MSG_DIALOG 3's title (strings::toWire). nullopt: no text in it, or nothing to change.
+    static std::optional<std::vector<std::uint8_t>> textForStock(std::span<const std::uint8_t> m, strings::LegacyText text);
+    /// The reverse for a stock client's MSG_TEXT_MESSAGE (strings::fromWire), for those that take
+    /// Unicode. nullopt: nothing to change.
+    static std::optional<std::vector<std::uint8_t>> textFromStock(std::span<const std::uint8_t> m, strings::LegacyText text);
     /// `unit` says `text` to everyone (SrvNet_BroadcastUnitSay: MSG_TEXT_MESSAGE 0xA8
     /// with its net code, where it is and how long; a bubble over it).
     void unitSay(const ServerObject& unit, std::u16string_view text, std::uint16_t duration);
@@ -2139,6 +2158,16 @@ public:
     float number(std::string_view name, std::size_t index = 0) const;
     /// The same by a key (game_data.hpp's GameDataKey: the name found once, for every frame's look-ups).
     float number(const things::GameDataKey& key, std::size_t index = 0) const { return things::gameNumber(gameData, key, gameFlags, index); }
+    /// noxcpp: a mode's own value for a gamedata number in this world alone (nox.setGameNumber):
+    /// the line this game reads for `name` (number()'s), its value `index` (within its table).
+    /// The first change copies the table this world reads (gameData then points at the copy,
+    /// owned here); the install's own is never changed, and the next map's world reads it again.
+    /// Read where the game reads the number: one read as a thing is made, or at the map's load,
+    /// keeps what it was then. False (nothing changed) for a name the game hasn't, an index past
+    /// its table, or no table.
+    bool setNumber(std::string_view name, std::size_t index, float value);
+    /// Whether this world reads its own copy of the numbers (setNumber was used).
+    bool ownNumbers() const noexcept { return ownGameData_ != nullptr; }
     bool solo() const noexcept { return (gameFlags & (GameFlag::Solo | GameFlag::SoloOther)) != 0; }
     bool quest() const noexcept { return (gameFlags & GameFlag::Quest) != 0; }
     bool network() const noexcept { return (gameFlags & GameFlag::Network) != 0; }
@@ -2586,6 +2615,8 @@ private:
         std::vector<std::unique_ptr<const ServerObject>> protos; ///< by type index (null: not made yet)
     };
     mutable TypeCache typeCache_;
+    /// setNumber's copy of the numbers (null: gameData is the install's).
+    std::unique_ptr<things::GameData> ownGameData_;
     MapGrid grid_;
     std::vector<std::uint32_t> fresh_; ///< the new list (noteNew), oldest first
     WallMap walls_;

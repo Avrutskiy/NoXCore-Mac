@@ -40,7 +40,9 @@
 #include <SDL3/SDL_main.h>
 
 #include "app.hpp"
+#include "game_data_swap.hpp"
 #include "backend_hooks.hpp"
+#include "character_play.hpp"
 #include "client_level_gate.hpp"
 #include "command_line.hpp"
 #include "editor/editor_settings.hpp"
@@ -71,9 +73,12 @@
 #include "noxcore/io/png.hpp"
 #include "noxcore/lobby/listing.hpp"
 #include "noxcore/modes/builtin.hpp"
+#include "noxcore/modes/registry.hpp"
 #include "noxcore/modes/script/manifest.hpp"
 #include "noxcore/modes/script/script_ui.hpp"
+#include "noxcore/server/game_host.hpp"
 #include "noxcore/server/solo.hpp"
+#include "noxcore/strings/l10n.hpp"
 #include "noxcore/things/object_class.hpp"
 #include "noxcore/version.hpp"
 
@@ -436,12 +441,12 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
                 app->profile.account.clear();
                 app->soloFromMenus = true;
             }
-            if (hostGame) {
-                // (Local tests: --menu-host-port, --host-loopback; normally the game's port.)
-                if (app->menuHostPort != 0) {
-                    settings.port = app->menuHostPort;
-                }
-                settings.loopbackOnly = app->hostLoopback;
+            {
+                // (Local tests: --menu-host-port, --host-loopback; normally the game's port. Game
+                // Modes' own modes and its Quest too, so a test run never needs 18590.)
+                const MenuHostSocket socket = menuHostSocket({settings.port, settings.loopbackOnly}, app->menuHostPort, app->hostLoopback);
+                settings.port = socket.port;
+                settings.loopbackOnly = socket.loopbackOnly;
             }
             try {
                 app->host = makeHost(*app, settings);
@@ -455,6 +460,10 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
                     startXwisPost(*app, *app->menus->hostLogin());
                 }
                 SDL_Log("%s", hostListingLog(menusHostListing(*app, hostGame), "hosting", app->host->port()).c_str());
+            } catch (const nox::server::MapRefused& ex) {
+                SDL_Log("hosting failed: %s", ex.what());
+                app->menus->memoryTricksNotice(ex.map); // (noxcpp: told why, not only logged)
+                return;
             } catch (const std::exception& ex) {
                 SDL_Log("hosting failed: %s", ex.what());
                 return;
@@ -510,6 +519,9 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         } catch (const std::exception& ex) {
             SDL_Log("solo: %s", ex.what());
             app->menus->showMainMenu();
+            if (const auto* refused = dynamic_cast<const nox::server::MapRefused*>(&ex)) {
+                app->menus->memoryTricksNotice(refused->map); // (noxcpp: told why instead of a hang)
+            }
             return;
         }
         app->soloFromMenus = true;
@@ -539,7 +551,14 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         settings.solo = true;
         settings.updateRate = app->serverUpdateRate; // (noxcore.cfg's)
         settings.map = start.map.string();
-        beginSoloScreensHost(*app, modeId, start.profile.playerClass, settings);
+        // (A mod's campaign, the row's Campaign choice: its saves its own, under the mode's.)
+        std::string campaign;
+        if (app->menus) {
+            if (const auto c = nox::modes::option(app->menus->pendingModeOptions(), "campaign")) {
+                campaign = std::string(*c);
+            }
+        }
+        beginSoloScreensHost(*app, modeId, start.profile.playerClass, settings, campaign);
         if (app->menus) {
             // (Host Custom's row's settings for it, the class the screens chose kept.)
             for (const auto& [key, value] : app->menus->pendingModeOptions()) {
@@ -565,10 +584,17 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
             SDL_Log("%s: %s", how.logTag.c_str(), ex.what());
             endSoloScreensHost(*app);
             app->menus->showGameBrowser();
+            if (const auto* refused = dynamic_cast<const nox::server::MapRefused*>(&ex)) {
+                app->menus->memoryTricksNotice(refused->map);
+            }
             return;
         }
         // (Its end back to the game list it was hosted from, as the other hosted modes'.)
-        SDL_Log("%s: hosting %s at %s%s", how.logTag.c_str(), how.what ? how.what(start.profile.playerClass).c_str() : modeId.c_str(),
+        const nox::modes::Mode* campaignMode = campaign.empty() ? nullptr : nox::modes::registry().find(campaign);
+        const std::string what = campaignMode && campaignMode->info.campaign ? campaignMode->info.campaign->title
+                                 : how.what                                 ? how.what(start.profile.playerClass)
+                                                                            : modeId;
+        SDL_Log("%s: hosting %s at %s%s", how.logTag.c_str(), what.c_str(),
                 settings.map.c_str(), start.continueSlot.empty() ? "" : (", continuing " + start.continueSlot).c_str());
         SDL_Log("%s", hostListingLog(menusHostListing(*app, !app->hostLoopback), how.logTag, app->host->port()).c_str());
         startLive(*app, app->host->address());
@@ -593,6 +619,10 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         return true;
     };
     callbacks.loggedIn = [](const std::string& nick) { SDL_Log("account: %s (XWIS login)", nick.c_str()); };
+    callbacks.characterListModeOnly = [app](const std::string& screen, bool on) {
+        app->charactersModeOnly[screen] = on; // (kept in noxcore.cfg with the Options' switches)
+        saveExtras(*app, currentExtras(*app));
+    };
     return callbacks;
 }
 
@@ -643,9 +673,10 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         SDL_Log("game folder: none found");
         SDL_Log("loading failed: no folder with the game's data (thing.bin, gamedata.bin...) found");
         if (app->screenshot.empty() && opts.mapPicture.empty()) {
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "NoX Core: loading failed",
-                                     "Nox wasn't found.\n\nPut noxcore.exe (with its files) in your Nox folder, the one "
-                                     "with GAME.EXE and thing.bin, or pass --game-dir (or set NOX_DATA) to that folder.",
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, NOX_TRC("game.load_failed.title", "NoX Core: loading failed"),
+                                     NOX_TRC("game.load_failed.no_game",
+                                             "Nox wasn't found.\n\nPut noxcore.exe (with its files) in your Nox folder, the one "
+                                             "with GAME.EXE and thing.bin, or pass --game-dir (or set NOX_DATA) to that folder."),
                                      nullptr);
         }
         return SDL_APP_FAILURE;
@@ -921,6 +952,18 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         } catch (const std::exception& ex) {
             SDL_Log("nox.csf: %s (menus show string ids)", ex.what());
         }
+        if (app->strings) {
+            // Which way its U+0080-U+00FF are meant, once (applyTextCodepage takes it).
+            app->csfGuess = nox::strings::guessLegacyCodepage(*app->strings);
+            SDL_Log("nox.csf: language %u, %s: %zu letters A-Z, %zu in U+00C0-U+00FF (shifted %d), %zu Cyrillic: auto reads %s%s",
+                    app->strings->language(), app->csfGuess.reason, app->csfGuess.asciiLetters, app->csfGuess.highLetters,
+                    app->csfGuess.shift, app->csfGuess.cyrillic,
+                    app->csfGuess.codepage == nox::strings::LegacyCodepage::Cp1251 ? "Windows-1251" : "Latin-1",
+                    app->strings->tagsSwapped() ? " (its text was stored without its tags' inversion: read the other way round)"
+                                                : "");
+        }
+        applyTextCodepage(*app); // (CsfText = cp1251 holds without a nox.csf too)
+        applyLanguage(*app);     // (NoX Core's own text: before the windows below are built)
         app->hud->setStrings(app->strings.get()); // tooltips
         app->itemNames = std::make_unique<ItemNames>(app->things, *app->art, app->modifiers, app->strings.get());
         const gui::Resources res = guiResources(*app);
@@ -963,7 +1006,11 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         if (opts.hostSettings) {
             // Our own game: the server here on its port, and we join it like anyone else.
             if (opts.hostSettings->solo && opts.hostSettings->map.empty()) {
-                opts.hostSettings->map = std::string(nox::client::solo_menu::firstMap(opts.profile.playerClass));
+                const nox::modes::Mode* campaign =
+                    app->hostCoopCampaignTest.empty() ? nullptr : nox::modes::registry().find(app->hostCoopCampaignTest);
+                opts.hostSettings->map = campaign && campaign->info.campaign // (--host-coop-campaign: its first map, the one it ships)
+                                             ? campaignMapPath(app->gameDir, campaign->info.id, campaign->info.campaign->firstMap).string()
+                                             : std::string(nox::client::solo_menu::firstMap(opts.profile.playerClass));
             }
             if (!opts.hostSettings->solo) {
                 // nox.cfg's server switches (the command line's name, mode and limits stand).
@@ -990,7 +1037,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                 opts.hostSettings->updateRate = app->serverUpdateRate; // (noxcore.cfg's)
                 if (!app->hostSoloScreensTest.empty()) {
                     // (--host-coop: as Host Custom > Co-op Campaign's new campaign of --class's chain)
-                    beginSoloScreensHost(*app, app->hostSoloScreensTest, opts.profile.playerClass, *opts.hostSettings);
+                    beginSoloScreensHost(*app, app->hostSoloScreensTest, opts.profile.playerClass, *opts.hostSettings,
+                                         app->hostCoopCampaignTest); // (--host-coop-campaign: that mod's campaign)
                 }
                 opts.hostSettings->saveRoot = app->saveRoot;
                 newSoloCharacter(*app, opts.profile, opts.hostSettings->map);
@@ -1031,6 +1079,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                 app->menus->setSaveDir(opts.saveDir);
             }
             app->menus->setSaveRoot(app->saveRoot);
+            app->menus->setCharacterListModeOnly(app->charactersModeOnly); // (noxcore.cfg's: character_labels.hpp)
             app->menus->setThings(&app->things);
             app->menus->setAudio(app->audio.get());
             SDL_StartTextInput(app->window); // for the menus' entry fields
@@ -1115,15 +1164,19 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         SDL_Log("loading failed: %s", ex.what());
         if (app->screenshot.empty()) {
             // A windowed run would otherwise just vanish (the log goes to stderr).
-            const std::string text = std::string(ex.what()) + "\n\nGame folder: " + nox::pathUtf8(app->gameDir) +
+            const std::string text = nox::l10n::format(
 #ifdef _WIN32
-                                     "\nPut noxcore.exe (with its files) in your Nox folder, the one with GAME.EXE "
-                                     "and thing.bin, or pass --game-dir (or set NOX_DATA) to that folder.";
+                NOX_TR("game.load_failed.error_windows",
+                       "{error}\n\nGame folder: {folder}\nPut noxcore.exe (with its files) in your Nox folder, the one with GAME.EXE "
+                       "and thing.bin, or pass --game-dir (or set NOX_DATA) to that folder."),
 #else
-                                     "\nNox wasn't found where it's usually installed. Pass --game-dir (or set "
-                                     "NOX_DATA) to the folder with GAME.EXE and thing.bin.";
+                NOX_TR("game.load_failed.error_other",
+                       "{error}\n\nGame folder: {folder}\nNox wasn't found where it's usually installed. Pass --game-dir (or set "
+                       "NOX_DATA) to the folder with GAME.EXE and thing.bin."),
 #endif
-            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "NoX Core: loading failed", text.c_str(), app->window);
+                {{"error", ex.what()}, {"folder", nox::pathUtf8(app->gameDir)}});
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, NOX_TRC("game.load_failed.title", "NoX Core: loading failed"), text.c_str(),
+                                     app->window);
         }
         return SDL_APP_FAILURE;
     }
@@ -1968,33 +2021,44 @@ SDL_AppResult gameLeft(App& app, JoinWaitEnd joinEnd = JoinWaitEnd::None)
     const bool askPassword = failed && !ownGame && endReason == EndReason::None && (app.live->client().passwordAsked() || wrongPassword);
     if (app.menus && !app.shotTaken) { // (a screenshot run ends once it has left)
         // Back to the game list.
-        std::string couldNot = "Couldn't join " + app.liveHost + " (see noxcore-log.txt)";
+        std::string couldNot =
+            nox::l10n::format(NOX_TR("game.join.couldnt_join_log", "Couldn't join {host} (see noxcore-log.txt)"), {{"host", app.liveHost}});
         for (const auto& [id, ui] : app.modeUis) {
             // (a class refused: a campaign mode's says which)
             if (const auto why = ui->joinRefused(static_cast<std::uint8_t>(app.live->client().joinError()), app.browser->selectedEntry())) {
-                couldNot = "Couldn't join " + app.liveHost + ": " + *why;
+                couldNot = nox::l10n::format(NOX_TR("game.join.couldnt_join_why", "Couldn't join {host}: {why}"),
+                                             {{"host", app.liveHost}, {"why", *why}});
                 break;
             }
         }
         // (a host whose content packs add object types lets in only a game with the same ones: refused
         // at the join, or its connect turned away as when full)
         if (const auto& ext = app.live->extended(); ext && ext->typesHash != 0 && ext->typesHash != nox::content::newThingTypes().hash) {
-            couldNot = "Couldn't join " + app.liveHost + ": its content packs (" + ext->typesPacks + ") add object types" +
-                       (nox::content::newThingTypes().hash != 0 ? ", and yours add other ones" : "") +
-                       ". Install the same packs in the mods folder to join.";
+            couldNot = nox::l10n::format(
+                nox::content::newThingTypes().hash != 0
+                    ? NOX_TR("game.join.packs_differ",
+                             "Couldn't join {host}: its content packs ({packs}) add object types, and yours add other ones. Install "
+                             "the same packs in the mods folder to join.")
+                    : NOX_TR("game.join.packs_missing",
+                             "Couldn't join {host}: its content packs ({packs}) add object types. Install the same packs in the "
+                             "mods folder to join."),
+                {{"host", app.liveHost}, {"packs", ext->typesPacks}});
         }
         // (a host with a lowest client level above ours refuses us at the join, or the session saw
         // its level before joining: LiveSession::tooOld; the notice in a message box over the game
         // list, as choosing a game marked "Update needed" shows it: client_level_gate.hpp)
         const bool tooOldNotice = noxsdl::client_level::noticeAfterJoin(failed, endReason != EndReason::None, app.live->extended());
         if (tooOldNotice) {
-            couldNot = "Couldn't join " + app.liveHost;
+            couldNot = nox::l10n::format(NOX_TR("game.join.couldnt_join", "Couldn't join {host}"), {{"host", app.liveHost}});
         } else if (askPassword) {
-            couldNot = "Couldn't join " + app.liveHost + (wrongPassword ? ": the password was wrong" : ": it asks for a password");
+            couldNot = nox::l10n::format(wrongPassword ? NOX_TR("game.join.wrong_password", "Couldn't join {host}: the password was wrong")
+                                                       : NOX_TR("game.join.needs_password", "Couldn't join {host}: it asks for a password"),
+                                         {{"host", app.liveHost}});
         }
         app.browser->setMessage(joinEnd == JoinWaitEnd::Cancelled                ? std::string()
                                 : failed && endReason == EndReason::None ? couldNot
-                                                                         : "Left " + app.liveHost);
+                                                                         : nox::l10n::format(NOX_TR("game.join.left", "Left {host}"),
+                                                                                             {{"host", app.liveHost}}));
         saveBars(app);
         app.book.reset();
         app.cinematics.reset();
@@ -2002,6 +2066,7 @@ SDL_AppResult gameLeft(App& app, JoinWaitEnd joinEnd = JoinWaitEnd::None)
         endSoloScreensHost(app); // (a campaign mode host's saves' root back)
         app.live.reset();
         app.view.reset();
+        useInstallData(app); // (a mod's own game data: the install's tables again)
         if (app.sprites) {
             app.sprites->beginMap({}); // (the map's images no longer kept)
             app.sprites->setHolding(false);
@@ -2370,7 +2435,9 @@ void drawGameHud(App& app)
     app.spellLimits.update(client.world(), client.netCode(), clockFrame());
     app.hud->setLimited(app.spellLimits.limited(client.world(), app.gameData, gameFlags(app), client.modeOwnsBook()));
     app.hud->setGameFlags(gameFlags(app)); // (the cooldowns and trap prices: the game's own gamedata lines)
-    if (app.renderGui && !(app.tradeScreens && app.tradeScreens->hidesHud())) {
+    // (The game's own HUD pieces: not while we observe, nor under a mod's covering window.)
+    const bool hudPieces = gameHudShown(app);
+    if (app.renderGui && hudPieces && !(app.tradeScreens && app.tradeScreens->hidesHud())) {
         app.hud->draw(app.renderer, app.font.get(), *app.sprites, client.world(), client.netCode(),
                        quickbarState(app), app.camera.viewWidth, app.camera.viewHeight,
                        gameFrame(app));
@@ -2405,14 +2472,16 @@ void drawGameHud(App& app)
             ui->drawHud(app, app.renderer, modeHud);
         }
     }
-    if (app.inventory && app.renderGui) {
+    if (app.inventory && app.renderGui && (hudPieces || app.inventory->isOpen())) {
+        // (Shut, it's the weapon panel and the buffs' row: HUD pieces.)
         app.inventory->setMulticlass(client.multiclass());
         app.inventory->setGameFlags(gameFlags(app));
+        app.inventory->setGameFrame(gameFrame(app));
         app.inventory->draw(app.renderer, client.world(), client.netCode(), app.camera.viewWidth,
                              app.camera.viewHeight, mousePos(app));
     }
     const bool hudHidden = app.tradeScreens && app.tradeScreens->hidesHud(); // (renderGUI off)
-    if (app.summon && app.renderGui && !hudHidden) {
+    if (app.summon && app.renderGui && !hudHidden && hudPieces) {
         app.summon->draw(app.renderer, client.world(), app.camera.viewWidth, app.camera.viewHeight,
                           mousePos(app));
     }
@@ -2728,6 +2797,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         }
         if (inGame && app->inGameSinceMs == 0) {
             app->inGameSinceMs = SDL_GetTicks();
+            characterPlayedHere(*app); // (noxcpp: a mode's game noted beside the character we joined with: character_play.hpp)
             if (app->joinTeam != 0) {
                 client.joinTeam(app->joinTeam);
             }

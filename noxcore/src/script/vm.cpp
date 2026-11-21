@@ -256,6 +256,11 @@ std::uint32_t Vm::read(std::size_t fn, bool global, std::int32_t offset) const
     if (!global && offset < 0) {
         return host_->objectVar(negated(offset));
     }
+    // (A file with no GLOBAL function has no globals: a global read gives 0, as loadVar's does, and
+    // write stores nothing.)
+    if (global && locals_.size() < 2) {
+        return 0;
+    }
     const auto& words = locals_[global ? 1 : fn];
     return offset >= 0 && static_cast<std::size_t>(offset) < words.size() ? words[static_cast<std::size_t>(offset)] : 0;
 }
@@ -549,7 +554,14 @@ bool Vm::run(std::size_t index, int depth, std::size_t begin, std::size_t end)
                     context_.y = fn.prefab->y;
                 }
             }
-            const int r = id < kBuiltinCount ? host_->builtin(id, *this) : 0;
+            // (An id outside the game's table and NoX Core's range: nothing done, as ever; the
+            // host says so. NoX Core's range pops and pushes as its id says, known or not.)
+            int r = 0;
+            if (id < kBuiltinCount || inNoxBuiltinRange(id)) {
+                r = host_->builtin(id, *this);
+            } else {
+                host_->unknownBuiltin(id, index);
+            }
             context_ = {};
             // 1: the builtin ended the script function (StopScript and the like).
             if (r == 1) {

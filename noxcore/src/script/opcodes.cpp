@@ -120,6 +120,12 @@ std::uint32_t operandCount(std::uint32_t op)
 
 std::string builtinName(std::uint32_t id)
 {
+    if (id == kLuauCall) {
+        return "LuauCall";
+    }
+    if (id == kLuauCallReturn) {
+        return "LuauCallReturn";
+    }
     return id < kBuiltinCount ? std::string(kBuiltinNames[id]) : "Builtin" + std::to_string(id);
 }
 
@@ -224,7 +230,7 @@ std::optional<std::string> check(const ScriptFile& file, std::size_t function)
             }
             break;
         case Op::CallBuiltin:
-            if (arg(0) >= kBuiltinCount) {
+            if (!isKnownBuiltin(arg(0))) {
                 return where(at, "no builtin " + std::to_string(arg(0)));
             }
             break;
@@ -239,6 +245,29 @@ std::optional<std::string> check(const ScriptFile& file, std::size_t function)
         at += 1 + n;
     }
     return std::nullopt;
+}
+
+std::optional<std::uint32_t> memoryTrickBuiltin(const ScriptFile& file)
+{
+    for (const Function& fn : file.functions) {
+        const auto& code = fn.code;
+        for (std::size_t at = 0; at < code.size();) {
+            const std::uint32_t op = code[at];
+            if (op == static_cast<std::uint32_t>(Op::CallBuiltin) && at + 1 < code.size()) {
+                const std::uint32_t id = code[at + 1];
+                if (id >= kBuiltinCount && !inNoxBuiltinRange(id)) {
+                    return id;
+                }
+            }
+            at += 1 + (op < kOpCount ? operandCount(op) : 0);
+        }
+    }
+    return std::nullopt;
+}
+
+std::string memoryTricksNotice(std::string_view map)
+{
+    return std::string(map) + " uses memory tricks of the original game that NoX Core does not run. Look for a NoX Core version of it.";
 }
 
 } // namespace nox::script

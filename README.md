@@ -43,6 +43,8 @@ original game is included.
   HD images.
 - **Mods:** game modes written in Luau, loaded from the `mods` folder.
 - **The NoX Content Editor** for the game's files, saving changes into content packs.
+- **Languages:** NoX Core's own text in Russian and Korean as well as English (machine
+  translations for now: corrections welcome), and Korean installs' game text drawn.
 
 ## Building
 
@@ -121,6 +123,30 @@ and the default save location to its `Save` subfolder. An explicit
 | `docs/original_bugs.md` | The bugs found in the original game, and which are fixed or kept. |
 | `docs/vanilla_deviations.md` | Where NoX Core deliberately behaves differently from the original, and why. |
 | `cmake/`, `.github/`, `packaging/` | Build settings and pinned dependencies, the automatic build, and a debug launcher. |
+
+## Contributing and translations
+
+See [CONTRIBUTING.md](CONTRIBUTING.md): how player-facing text is written so it can be
+translated, and the rule that keeps every language current with the English.
+
+## Security warning: map scripts in the original game
+
+> **In the original game, a map's script can run any program code on your computer.** The original
+> game never checks which built-in function a map script asks for, so a map can make it run machine
+> code of its own. That code runs with your Windows account's permissions and can do anything a
+> program can. Community maps have used this trick since at least 2019. The ones we examined only
+> change the game, but nothing in the original game stops a hostile map.
+>
+> - **At risk:** anyone who hosts a game or plays alone on the original game, with a map from
+>   someone they don't trust. Playing alone also hosts the game on your computer.
+> - **Joining someone's game** on the original game doesn't run its script. But the map you
+>   download stays in your maps folder and runs if you host it later. The original game's reading of
+>   a downloaded map is also unchecked, so a crafted map could in principle harm a player who only
+>   joins.
+> - **NoX Core is not affected.** It never runs code from a map, and it checks every map script it
+>   reads. Maps that rely on this trick don't work in NoX Core.
+>
+> The details are in [docs/original_bugs.md](docs/original_bugs.md) (OB-434 and OB-435).
 
 ## Reporting bugs
 

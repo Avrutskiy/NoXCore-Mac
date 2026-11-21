@@ -1,12 +1,14 @@
 // A game hosted here (app.hpp): its settings from nox.cfg, the server made, its XWIS post, its
 // bots, its router port, and a solo game's new character.
 #include "app.hpp"
+#include "game_data_swap.hpp"
 
 #include "noxcore/bot/bot_squad.hpp"
 #include "noxcore/client/solo_menu.hpp"
 #include "noxcore/client/solo_saves.hpp"
 #include "noxcore/io/file.hpp"
 #include "noxcore/lobby/listing.hpp"
+#include "noxcore/strings/l10n.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -143,6 +145,19 @@ void setLocalBots(App& app, const std::array<int, 3>& wanted, int minTier, int m
     });
 }
 
+/// A bot's state (the squad's English word) as the Bots tab shows it.
+static std::string botStateText(const std::string& state)
+{
+    if (state == "joining") return NOX_TR("server.bots.state_joining", "joining");
+    if (state == "waiting for the map") return NOX_TR("server.bots.state_waiting_map", "waiting for the map");
+    if (state == "downloading the map") return NOX_TR("server.bots.state_downloading_map", "downloading the map");
+    if (state == "dead") return NOX_TR("server.bots.state_dead", "dead");
+    if (state == "playing") return NOX_TR("server.bots.state_playing", "playing");
+    if (state == "watching") return NOX_TR("server.bots.state_watching", "watching");
+    if (state == "leaving") return NOX_TR("server.bots.state_leaving", "leaving");
+    return state;
+}
+
 /// What the Bots tab shows.
 ServerOptions::BotsView localBotsView(App& app)
 {
@@ -161,7 +176,7 @@ ServerOptions::BotsView localBotsView(App& app)
             if (s.state == "playing" || s.state == "dead" || s.state == "watching") {
                 ++v.in;
             }
-            v.lines.push_back(s.name + "\t" + s.state + "  " + std::to_string(s.kills) + "-" + std::to_string(s.deaths));
+            v.lines.push_back(s.name + "\t" + botStateText(s.state) + "  " + std::to_string(s.kills) + "-" + std::to_string(s.deaths));
         }
     }
     return v;
@@ -174,6 +189,7 @@ std::unique_ptr<LocalHost> makeHost(App& app, const HostSettings& settings)
     // Maths, noxcore.cfg's ExactMaths.)
     HostSettings s = settings;
     s.exactMaths = app.exactMaths;
+    useInstallData(app); // (a game is made from the install's tables: a mod's game copies them, its own read in their place)
     return std::make_unique<LocalHost>(app.things, &app.modifiers, app.gameData,
                                        app.strings.get(), app.gameDir, s);
 }
@@ -186,8 +202,9 @@ void notePortMoved(App& app)
     if (!app.host || !app.host->portMoved()) {
         return;
     }
-    const std::string text = "Port " + std::to_string(app.host->askedPort()) +
-                             " is in use on this computer (another game or server): this game is on port " + std::to_string(app.host->port()) + ".";
+    const std::string text = nox::l10n::format(
+        NOX_TR("server.hosting.port_moved", "Port {asked} is in use on this computer (another game or server): this game is on port {port}."),
+        {{"asked", app.host->askedPort()}, {"port", app.host->port()}});
     SDL_Log("hosting: %s", text.c_str());
     if (app.console) {
         app.console->print(text, Red);
@@ -213,7 +230,7 @@ void hostSettingsFromConfig(const App& app, HostSettings& s)
         return std::nullopt;
     };
     if (const auto v = c.setting("ServerName"); v && !v->empty()) {
-        s.name = v->substr(0, 15);
+        s.name = nox::strings::fitWire8(*v, 15);
     }
     if (const auto v = number("MaxPlayers"); v && *v > 0) {
         s.maxPlayers = std::clamp(*v, 1, 32);
@@ -281,8 +298,10 @@ void tickPortMapping(App& app)
     } else if (in) {
         const std::string port = std::to_string(app.host->port());
         SDL_Log("UPnP: port %s not mapped: %s", port.c_str(), app.portMapper->detail().c_str());
-        centredMessage(app, "Players outside your network may not be able to join: forward UDP port " + port +
-                                " on your router to this computer (UPnP: " + app.portMapper->detail() + ").");
+        centredMessage(app, nox::l10n::format(NOX_TR("server.hosting.forward_port",
+                                                     "Players outside your network may not be able to join: forward UDP port {port} on "
+                                                     "your router to this computer (UPnP: {detail})."),
+                                              {{"port", port}, {"detail", app.portMapper->detail()}}));
         app.portReported = true;
     }
 }

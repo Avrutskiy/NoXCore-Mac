@@ -406,6 +406,74 @@ Options switch unless noted.
   NoX Core's Nox-style fonts (fonts/ beside the program: the game's letters on its 9- and 15-row
   grid, drawn smooth with Use HD Images), off Caudex Bold, with Noto Sans for the characters a face
   lacks (text.hpp, font_choice.hpp). Revert: none (the game's bitmap fonts aren't drawn).
+- **Russian fan translations are read as real Cyrillic:** their nox.csf stores each letter's
+  Windows-1251 byte as the code point (U+00C0-U+00FF) and their .fnt files draw Cyrillic there; the
+  game reads and sends the text as stored, and a Russian player's name, chat, .plr name and lobby
+  text carry the same bytes. One translation's fonts draw each letter one place on (А at 0xC1, я at
+  0xC0), its file stored so. NoX Core tells such a file by its letters (at least 50 in
+  U+00C0-U+00FF making 25% or more of its letters, no real Cyrillic, not the header's multibyte
+  languages 6 and 8) and finds the shift as the rotation whose letters read most like Russian
+  (letter frequencies and case; nox::strings::guessLegacyCodepage, cp1251Shift; logged at start;
+  noxcore.cfg's `CsfText = latin1`, `cp1251` or `cp1251:N` overrides it, `auto` by default, taken
+  at start). The table is decoded to real Cyrillic once at load, and the program then holds Unicode
+  everywhere (its TrueType fonts draw it; wrapping, measuring, mods' text and logs see Cyrillic).
+  Where text crosses to the original game it converts, once per message or file
+  (strings::fromWire / toWire, with the shift): to and from stock clients the names, chat lines, the
+  server's lines, team, shop and NPC dialog names (World::textForStock / textFromStock, chosen per
+  client: GameHost::textFor); .plr names (read and written); XWIS lobby chat, game names and the
+  MOTD; and the map editor's 8-bit map texts (Windows-1251 there instead of 1252). Between a NoX
+  Core host whose own text is Windows-1251 (it says so: lobby::ServerFeature::RecodesText) and NoX
+  Core clients of level 12 (lobby::kUnicodeTextLevel) the text goes as real Unicode both ways,
+  whatever the client's install keeps: the host recodes a stock client's chat line for them, and
+  theirs for the stock clients (lobby::unicodeTextWith). A Latin-1 host passes everything on as it
+  came, as GAME.EXE does, so a Russian install's NoX Core game there sends and reads its own
+  convention, as a stock Russian game there does: its stock Russian players read it and it reads
+  them. A Russian install's game waits for a host's answer to its query before its join (up to
+  3 s; a stock host never answers), so its name goes the right way. Latin-1 letters of our own or a mod's text ("Café") go to stock clients as
+  their plain letters ("Cafe"), since Windows-1251 has none and their fonts would draw Cyrillic
+  there. A new character's file name is its name's first letter as the game makes it ("П00.plr").
+  Every other install (Latin-1) sends and stores everything as before, byte for byte. Revert:
+  CsfText = latin1.
+- **A host's player names are kept whole** (game_host.cpp): the console, its logs, kick and ban
+  by name, the kick dialog's ban and co-op's notices use the name as the player has it (UTF-8),
+  where NoX Core kept only its ASCII letters ('?' for any other, so a name with one could not be
+  banned from the kick dialog). The ban list and kick votes key by the name as Unicode. Modes see
+  it whole too; what they kept by the old form stays found: a co-op campaign's runner and a Deep
+  Delve character saved under the '?' form are read from there (coop::olderRunnerKey,
+  store.olderName). The name in the PlayerInfo the other clients get is the client's bytes as
+  sent (GAME.EXE copies it whole); only a Windows-1251 host's reading writes it again.
+- **Labels that don't fit their box are fitted** (noxsdl gui.cpp, Gui::fitText): a check box's,
+  radio button's, static text's or button's text that the game would draw past its box (wider
+  than the box on one line, or wrapped onto more lines than the box holds, over the next row) is
+  drawn in the small font on one line when that fits, else wrapped in the small font when the box
+  has room for its lines, else the small font's lines the box holds. Worked out once per text,
+  box, font and scale, kept on the window. A text that fits is drawn as the game draws it.
+- **NoX Core's own text is shown in the player's language** (noxcore/include/noxcore/strings/l10n.hpp;
+  the language files in noxsdl/res/lang, the lang folder beside the program): its menus, Options,
+  hosting screens, HUD additions, the map editor and the Content Editor. The language is
+  noxcore.cfg's `Language = ru` (or `ko`, `en`), else the one nox.csf is in (a Windows-1251 table:
+  Russian; Hangul text or the header's language 8: Korean; its common words otherwise), else the
+  system's, else English; a language without a file shows English, and so does an entry whose
+  English changed since it was translated. Chosen once at start (logged, with the milliseconds it
+  took). Russian and Korean ship, machine-translated for now. The game's own text still comes from
+  nox.csf. What crosses to other programs stays English: the map editor's history labels in an
+  edit session's bytes (shown translated), the hosted server's messages, saved files.
+- **An official Korean install's text is drawn** (noxsdl text.cpp): its nox.csf is UTF-16 Hangul
+  (header language 8), which the game draws with its own multibyte font sets; NoX Core's faces had
+  no Hangul, so every string of such an install drew nothing. Noto Sans KR's Hangul
+  (fonts/NotoSansKR-SemiBold-Hangul.ttf, a subset: the syllables, jamo and CJK punctuation) is now
+  the last face of each chain, after every other, so Latin, Cyrillic and Greek text draws exactly as
+  before; the map editor and the Content Editor merge it into their font. Japanese (language 6)
+  still has no font.
+- **8-bit text from the original game shows its accents** (noxcore client/world.cpp, the lobby's
+  game names and MOTD): a narrow chat line's bytes past 0x7F are Latin-1 letters (or a Russian
+  install's Windows-1251), as the game widens them, where NoX Core showed U+FFFD; a game name in
+  UTF-8 (a NoX Core host's) still reads as UTF-8. Display only: nothing sent changes.
+- **nox.csf stored without its tags' inversion is read the other way round:** when most of its
+  strings decode to nothing but U+F800 and up (plain UTF-16 under the inverted tags, or the reverse,
+  as a re-encoding tool can leave it), every string is read the other way round
+  (StringTable::tagsSwapped; a game hosted with it sends the text so read). The game shows such a
+  file as unknown characters. Revert: none wanted.
 
 ### VD-06: Solo cinematics and briefings (noxsdl/src/cinematics.cpp)
 
@@ -2041,6 +2109,29 @@ The engine's logic is the exe's; these are where the output differs.
 - **Revert:** have ScriptHost::objectVar / setObjectVar give no storage (the original game
   crashes there instead, so there is no faithful behaviour to restore); leave the compiler option
   off.
+
+### VD-78: Scripts built on the original game's memory tricks are refused, clearly
+
+- **Vanilla:** the interpreter never range-checks a CallBuiltin's id. Some community maps use that:
+  a call of an id far past the table (973229) jumps into the interpreter's own stack and runs the
+  map's machine code, which installs extra builtins (211-218) that read and write raw memory. The
+  original game runs them.
+- **Ours:** NoX Core never runs map-supplied machine code or raw memory access. Until now such a
+  map hung or half-ran (an unknown id pops nothing, the stack drifts, a loop spins till the step
+  budget). Now a script calling any builtin id from 211 up outside NoX Core's own range
+  (1024-2047) is refused (`script::memoryTrickBuiltin`, one walk of the code at load):
+  - a game host (GameHost) never loads such a map: as its first map it throws `MapRefused` (noxsdl
+    shows the notice); picked (Server Settings' Go, the console's load, a vote) or reached by an
+    exit, the game stays on its map, loaded again as for a map that can't be read (a solo game's
+    from the copy its exit just saved; with no copy, as after a saved game's load, afresh from its
+    file), and everyone is told; such maps are left out of the Server
+    Settings' list, the map vote and the map cycle;
+  - the server's script host never starts such a script (any other load: a bare Server);
+  - the map editor shows it read-only, whatever its settings, and its validator warns.
+
+  The words: "<Map> uses memory tricks of the original game that NoX Core does not run. Look for a
+  NoX Core version of it." No stock map calls such an id.
+- **Revert:** none wanted (the owner's decision: NoX Core never runs these scripts).
 
 ### VD-33: A host's goodbye and a client's leave wait in the background
 

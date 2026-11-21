@@ -29,7 +29,8 @@
 //     "server": "server/main.luau",      its server script (this is the default)
 //     "ui": "ui/main.luau",              its UI script, sent to NoX Core players (none: text only)
 //     "uiApi": 1,                        the UI API it's written for (1, 2: images, sounds, keys...,
-//                                        or 3: lines, tooltips, labels, HUD windows, drags...;
+//                                        or 3: lines, tooltips, labels, HUD windows, drags...; up to
+//                                        6: the game's pictures, clipping, the view;
 //                                        script_ui.hpp), sent only to clients that give it
 //     "looksLike": "arena",              a stock mode it plays as, its own rules the script's
 //                                        ("arena" or "ctf": scripted_mode.hpp)
@@ -37,6 +38,17 @@
 //                                        mode's; the maps <prefix>_<slot><TAG>, swept as its own
 //     "reference": true,                 a reference for mod authors: the map editor opens it as
 //                                        a copy, never in place (the game doesn't read it)
+//     "campaign": {                      a story campaign (ModeInfo::campaign): Host Custom's
+//                                        Co-op Campaign lists it beside the game's own, the co-op
+//                                        campaign plays it with this mod's server script beside it;
+//                                        never a row of its own (a dedicated server's --mod still
+//                                        hosts the mod alone, as any mod)
+//       "title": "My Story",             the name it's listed by (1-32; the mode's "name" if left out)
+//       "firstMap": "MS01A",             a new campaign's first map
+//       "classes": ["warrior"],          the classes it's played as (1-3 of warrior, wizard, conjurer)
+//       "maps": ["MS01A", "MS01B"]       its maps (at most 256, the first map among them; left out:
+//                                        those the mod ships)
+//     },
 //     "options": [                       its settings, shown under its row in Host Custom:
 //       {"key": "rounds", "label": "Rounds", "kind": "number", "min": 1, "max": 9, "default": 3},
 //       {"key": "pace", "label": "Pace", "kind": "choice", "choices": ["Calm", "Hectic"], "default": 0},
@@ -44,6 +56,10 @@
 //       {"key": "motto", "label": "Motto", "kind": "text"}
 //     ]
 //   }
+//
+// Beside mode.json, a mod's maps\<Name>\<Name>.map (and its .nxz) are its games' own: found before
+// the game's maps folder in its games, and in no other game (server/mode_maps.hpp). configure's
+// "map" may name one.
 #pragma once
 
 #include "noxcore/modes/mode.hpp"
@@ -58,7 +74,7 @@ namespace nox::modes::script {
 /// The script API this build gives (a mode.json's "api"; another's is refused, with its reason).
 inline constexpr int kScriptApi = 1;
 /// The newest UI API this build gives (a mode.json's "uiApi", 1 to this; script_ui.hpp).
-inline constexpr int kUiApi = 5;
+inline constexpr int kUiApi = 6;
 
 struct Manifest {
     ModeInfo info;

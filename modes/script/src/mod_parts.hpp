@@ -10,6 +10,7 @@
 #include "mod_leap.hpp"
 #include "mod_scheduler.hpp"
 #include "mod_store.hpp"
+#include "mod_texts.hpp"
 #include "mod_weather.hpp"
 
 #include "noxcore/server/game_host.hpp"
@@ -39,6 +40,8 @@ struct Parts {
     Anims anims;
     /// nox.defineAbility's and nox.grantAbility's: each player's strip (by peer).
     ModAbilities abilities;
+    /// nox.setText's overlay: nothing kept or sent till the mode first calls it.
+    Texts texts;
     /// nox.store's (opened at the first call; none while the host keeps no store).
     std::shared_ptr<ModStore> store;
     /// This game's locks' token (nox.store.lock).
@@ -50,7 +53,7 @@ struct Parts {
 /// The parts' toolbox functions set in the `nox` table on top of L's stack: the scheduler's, the
 /// events', the store's (nox.store when the host keeps one), the records' (nox.records when the
 /// host keeps the mode's records: ServerContext::records), the items', the players', the
-/// generator's, the weather's, the draw scales'.
+/// generator's, the weather's, the draw scales', the observer camera's (mod_camera.hpp).
 void addPartsToolbox(lua_State* L, bool store, bool records);
 
 /// The toolbox's nox.records table pushed (its functions: mod_records.cpp).

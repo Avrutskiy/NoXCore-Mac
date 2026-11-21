@@ -108,6 +108,13 @@ public:
     std::vector<std::uint16_t> cellOrder() const { return grid_.order(); }
     /// The meters' bottle slots (health, mana, cure poison): their types and counts for the HUD.
     const BottleSlots& bottles() const { return bottles_; }
+    /// The bottle slots' types found again by name in thing.bin as it now is (a game's own
+    /// thing.bin swapped in before its first map: game_data_swap.hpp), then re-picked.
+    void retypeBottles()
+    {
+        bottles_ = BottleSlots(BottleSlots::typesIn(things_));
+        bottles_.pick(grid_);
+    }
     /// The item a bottle slot's key or click uses now (BottleSlots::item), if any.
     std::optional<std::uint16_t> bottleItem(int slot) const { return bottles_.item(grid_, slot); }
     /// Snd_PlaySound, for the panel's own sounds (taking an item, setting it down).
@@ -149,6 +156,8 @@ public:
     /// gameFlags reads it (the exe's class table: SOLO lines in a solo game, ARENA ones online).
     void setGameData(const nox::things::GameData* data) { gameData_ = data; }
     void setGameFlags(std::uint32_t gameFlags) { gameFlags_ = gameFlags; }
+    /// The game frame shown (the stamina pie counts back up from the server's last report).
+    void setGameFrame(std::uint32_t frame) { gameFrame_ = frame; }
     /// The item names (identify's title).
     void setItemNames(ItemNames* names) { names_ = names; }
     /// The amount box, for dropping part of a stack: label, the item, the most, at output point,
@@ -300,6 +309,7 @@ private:
 
     const nox::things::GameData* gameData_ = nullptr;
     std::uint32_t gameFlags_ = 0; ///< setGameFlags
+    std::uint32_t gameFrame_ = 0; ///< setGameFrame
     ItemNames* names_ = nullptr;
     AskAmount askAmount_;
     bool mapShown_ = false;

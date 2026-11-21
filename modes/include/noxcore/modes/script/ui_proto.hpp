@@ -35,7 +35,8 @@
 //   kDrawScale  u16 the thing's net code, u16 its type (its net type id), u16 the scale in 1/256
 //               (128-768: 0.5-3; 256: as its type's, the scale let go)    (6 bytes)
 // A UI of API 4 (kBegin's api byte 4) and everything of it go only to a client at client level 5
-// or above (kUiApi4Level) that named ModeUi and ModeUi2; the bytes are API 2's.
+// or above (kUiApi4Level) that named ModeUi and ModeUi2; the bytes are API 2's. So for API 5 at
+// level 6 (kUiApi5Level) and API 6 at level 11 (kUiApi6Level).
 // and, only to a client at client level 6 or above (kBigDataLevel), a value too big for one kData
 // (nox.send over kMaxValue bytes, to kMaxBigValue), in order with the kData before and after it:
 //   kDataBegin  u32 the value's bytes, u8 coding (0 stored, 1 NXZ), u32 the coded bytes
@@ -83,6 +84,16 @@
 //   kToBars       u8 kind (0 a spell, 1 an ability), u8 its id (a spell 1-136, an ability 1-5)
 //                 (2 bytes; in the first empty slot, only where no slot holds it: no book, no
 //                 sound, no sparks, no slot moved, the set shown unchanged)
+// and, only to a client at client level 14 or above (kTextsLevel) that named ModeUi, a script
+// mode's text overlay (nox.setText, nox.clearText: texts its string lookups find before nox.csf's,
+// each in that client's language; the whole set to a client at its first ready):
+//   kTextSet      str key, u8 flags (kTextMore: the text goes on in the next kTextSet), str text
+//                 (UTF-8; a long one in pieces, one after another)
+//   kTextClear    str prefix (the keys that start with it gone; "": every one)
+// and, only to a client at client level 15 or above (kCharacterNoteLevel) that named ModeUi, a
+// script mode's line about the player's character (nox.characterNote: its level, how far it has
+// come), which the client keeps beside the character it joined with for its character screens:
+//   kCharacterNote str the line (UTF-8, plain text, at most kMaxCharacterNoteBytes; "": none)
 // Client -> server:
 //   kReady  u8 1 when the UI draws views itself (it has onView), else 0     (it runs)
 //   kSend   a value from the UI, for the server script's onUiMessage
@@ -136,6 +147,9 @@ enum Sub : std::uint8_t {
     kSpin = 24,
     kAnim = 25,
     kToBars = 26,
+    kTextSet = 27,
+    kTextClear = 28,
+    kCharacterNote = 29,
 };
 
 /// The most UI source a server sends, and a client takes (section 10.3's cap).
@@ -161,6 +175,9 @@ inline constexpr std::uint16_t kUiApi3Level = 3;
 inline constexpr std::uint16_t kUiApi4Level = 5;
 /// The lowest client level a server sends a UI of API 5 to (nox.hudReserve: as kUiApi3Level's).
 inline constexpr std::uint16_t kUiApi5Level = 6;
+/// The lowest client level a server sends a UI of API 6 to (the game's pictures, clipping, the
+/// view: as kUiApi3Level's).
+inline constexpr std::uint16_t kUiApi6Level = 11;
 /// The lowest client level a server sends kDrawScale to (with ModeUi named).
 inline constexpr std::uint16_t kDrawScaleLevel = 5;
 /// The lowest client level a server sends kDataBegin and kDataChunk to (a big value).
@@ -684,6 +701,126 @@ inline std::optional<AbilityUse> decodeAbilityUse(std::span<const std::uint8_t> 
     }
     u.release = phase == 1;
     return u;
+}
+
+/// (Client level 14) A script mode's text overlay (nox.setText, nox.clearText): texts the client's
+/// string lookups find before its nox.csf's (strings::StringTable::setOverlay), each already in
+/// that client's language. kTextSet's payload: str the key, u8 flags (kTextMore: the text goes on in
+/// the next kTextSet, of the same key, which comes right after it), str the text's piece (UTF-8, at
+/// most kTextPieceBytes); kTextClear's: str a prefix (the keys starting with it gone; "": every one).
+inline constexpr std::uint16_t kTextsLevel = 14;
+inline constexpr std::size_t kMaxTextKeyBytes = 64;      ///< a key's bytes at most
+inline constexpr std::size_t kMaxTextValueBytes = 4096;  ///< a whole text's bytes at most (a client cuts past it)
+inline constexpr std::size_t kTextPieceBytes = 800;      ///< a kTextSet's piece's bytes at most
+/// The most keys a mode's overlay holds (nox.setText's limit); a client keeps no more (a new key
+/// past them is let go: only a host that isn't ours sends one).
+inline constexpr std::size_t kMaxTextKeys = 512;
+inline constexpr std::uint8_t kTextMore = 1;
+struct TextPiece {
+    std::string key;
+    bool more = false;
+    std::string text; ///< UTF-8
+    bool operator==(const TextPiece&) const = default;
+};
+
+/// The kTextSet messages of one key's text: one, or a piece of up to kTextPieceBytes each (cut
+/// between UTF-8 characters), all but the last kTextMore. The key cut to kMaxTextKeyBytes, the
+/// text to kMaxTextValueBytes (between characters).
+inline std::vector<std::vector<std::uint8_t>> textSetMessages(std::string_view key, std::string_view text)
+{
+    const auto cutAt = [](std::string_view s, std::size_t most) {
+        std::size_t n = std::min(s.size(), most);
+        if (n < s.size()) {
+            while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) {
+                --n;
+            }
+        }
+        return n;
+    };
+    key = key.substr(0, kMaxTextKeyBytes);
+    text = text.substr(0, cutAt(text, kMaxTextValueBytes));
+    std::vector<std::vector<std::uint8_t>> out;
+    do {
+        const std::size_t n = cutAt(text, kTextPieceBytes);
+        const bool more = n < text.size();
+        Writer w;
+        w.str(key);
+        w.u8(more ? kTextMore : 0);
+        w.str(text.substr(0, n));
+        out.push_back(message(kTextSet, w.out));
+        text.remove_prefix(n);
+        if (!more) {
+            break;
+        }
+    } while (true);
+    return out;
+}
+
+/// A kTextSet payload read (bytes past the text left for later versions); none: cut short, or no
+/// key. A key past kMaxTextKeyBytes is cut to it, a piece past kTextPieceBytes too.
+inline std::optional<TextPiece> decodeTextSet(std::span<const std::uint8_t> payload)
+{
+    Reader r{payload};
+    TextPiece t;
+    t.key = r.str();
+    t.more = (r.u8() & kTextMore) != 0;
+    t.text = r.str();
+    if (!r.ok || t.key.empty()) {
+        return std::nullopt;
+    }
+    t.key.resize(std::min(t.key.size(), kMaxTextKeyBytes));
+    t.text.resize(std::min(t.text.size(), kTextPieceBytes));
+    return t;
+}
+
+inline std::vector<std::uint8_t> textClearMessage(std::string_view prefix)
+{
+    Writer w;
+    w.str(prefix.substr(0, kMaxTextKeyBytes));
+    return message(kTextClear, w.out);
+}
+
+/// A kTextClear payload read: its prefix ("" every key); none: cut short.
+inline std::optional<std::string> decodeTextClear(std::span<const std::uint8_t> payload)
+{
+    Reader r{payload};
+    std::string prefix = r.str();
+    if (!r.ok) {
+        return std::nullopt;
+    }
+    prefix.resize(std::min(prefix.size(), kMaxTextKeyBytes));
+    return prefix;
+}
+
+/// (Client level 15) A script mode's line about a player's character (nox.characterNote): kept by
+/// the client beside the character it joined with, shown on its character screens. kCharacterNote's
+/// payload: str the line (UTF-8, at most kMaxCharacterNoteBytes). The client treats it as
+/// untrusted: cut and cleaned again (character_notes.hpp's cleanText), shown as plain text.
+inline constexpr std::uint16_t kCharacterNoteLevel = 15;
+inline constexpr std::size_t kMaxCharacterNoteBytes = 80;
+
+inline std::vector<std::uint8_t> characterNoteMessage(std::string_view line)
+{
+    Writer w;
+    std::size_t n = std::min(line.size(), kMaxCharacterNoteBytes);
+    while (n > 0 && n < line.size() && (static_cast<unsigned char>(line[n]) & 0xC0) == 0x80) {
+        --n; // (cut between UTF-8 characters)
+    }
+    w.str(line.substr(0, n));
+    return message(kCharacterNote, w.out);
+}
+
+/// A kCharacterNote payload read, its line as sent (cut to kMaxCharacterNoteBytes; bytes past it
+/// left for later versions); none: cut short.
+inline std::optional<std::string> decodeCharacterNote(std::span<const std::uint8_t> payload)
+{
+    Reader r{payload};
+    std::string line = r.str();
+    if (!r.ok) {
+        return std::nullopt;
+    }
+    line.resize(std::min(line.size(), kMaxCharacterNoteBytes));
+    return line;
 }
 
 } // namespace nox::modes::script::uimsg

@@ -122,6 +122,41 @@
 //                                    pause), none leaves the game's name. A client before it never
 //                                    calls it (the game's name, as before)
 //
+// UI API 6 (mode.json's "uiApi": 6; sent only to a client at client level 11 or above that names
+// ModeUi and ModeUi2: ui_proto.hpp's kUiApi6Level) adds, beside nox.api being 6:
+//   nox.thing(typeName, x, y, w, h)  w, h: the picture fitted into a w x h box centred on (x, y),
+//                                    its shape kept (h none: w); none: its own size, as before
+//   nox.gameImage(name, x, y [, w, h])  (inside draw) any of the game's own pictures: one of
+//                                    thing.bin's named images (its still, or its animation's first
+//                                    frame), or with a whole number for the name the video.bag
+//                                    image of that index (any frame of any animation, a wall, a
+//                                    floor tile, an item's picture...), at (x, y) moved by its own
+//                                    draw offset as the game draws it (scaled with it), its size or
+//                                    scaled to w x h; the HD pack's picture where it has one. True:
+//                                    drawn; false (nothing drawn): the client hasn't it (a name it
+//                                    hasn't, an index past video.bag's or negative)
+//   nox.gameImageSize(name)          its width, height and own draw offset: w, h, ox, oy (drawn at
+//                                    its size at (x, y), its top left is at (x + ox, y + oy)); a
+//                                    name or an index as gameImage's; nil: not there
+//   nox.gameImageIndex(name [, frame])  the video.bag index of a named image's still (frame 0 or
+//                                    none), or of its animation's frame `frame` (from 0); nil:
+//                                    none (no such name or frame, or the client hasn't it)
+//   nox.panel(x, y, w, h [, fill])   (inside draw) a box in the game's own window look: filled
+//                                    (black; a colour; false: none), and the game's window border
+//                                    pieces round it as its bordered windows have them (straddling
+//                                    its edge, 10 units out)
+//   nox.clip(x, y, w, h), nox.clip() (inside draw) the window's later draws kept inside that box
+//                                    of it (and the window); no box: the whole window again
+//   nox.view()                       { x, y, w, h }: the whole view in the UI's units (x, y its top
+//                                    left: negative where it reaches past the 640 x 480)
+//   NoxWindowSpec's bounds           a window (framed or not) may be anywhere on the whole view and
+//                                    as big as it (a framed one keeps its frame and title on it),
+//                                    kept to it again when the view changes
+//   NoxWindowSpec's cover            true: while the window is open the game's own HUD pieces (the
+//                                    spell bar, the meters and potion slots, the weapon panel, the
+//                                    buffs' row, the summon cage, the mod's ability strip) are
+//                                    neither drawn nor take the mouse (coversHud)
+//
 // The program calls frame() once a frame and draws windows(); a click in one goes to click().
 // Without a server (the map editor's UI preview), runLocal starts a UI from its source, useAssets
 // hands it a mod's assets, receive() feeds it messages as a server would, setSender takes what it
@@ -151,6 +186,10 @@ class HeadlessClient;
 
 namespace nox::things {
 struct ThingDb;
+}
+
+namespace nox::strings {
+class StringTable;
 }
 
 namespace nox::modes::script {
@@ -193,12 +232,18 @@ struct UiDraw {
         /// (API 4) a spell's icon (`index` its spell id) or a warrior ability's (`index` the
         /// ability's id with client::kAbilityTag), its top left at (x, y), w x h (0: its own size)
         SpellIcon,
+        /// (API 6) one of the game's pictures: video.bag's image `index` (index >= 0), else
+        /// thing.bin's named image `text` (its still, or its animation's first frame); its top
+        /// left at (x, y) (moved by its own offset, scaled with it), w x h (0: its own size)
+        GameImage,
+        /// (API 6) the window's later draws kept inside (x, y, w, h) of it; w < 0: the whole window
+        Clip,
     };
     Kind kind = Kind::Box;
-    float x = 0, y = 0, w = 0, h = 0; ///< (Text: its top left)
+    float x = 0, y = 0, w = 0, h = 0; ///< (Text: its top left; Thing, API 6: the box it's fitted to, 0: none)
     UiColor color;
     std::string text;
-    int index = -1;    ///< (Image, Thing)
+    int index = -1;    ///< (Image, Thing, SpellIcon; GameImage: a video.bag index, -1 by `text`)
     float width = 1;   ///< (Line) 1-8 UI units
     float size = 1;    ///< (Text, API 5) times the UI's text size, 1-4
 };
@@ -258,6 +303,16 @@ inline constexpr std::size_t kUiMaxLeaps = 64;
 /// ("SPELL_FIREBALL"), or a warrior's ability's ("ABILITY_WARCRY", tagged as a multiclass book
 /// keeps them: Hud::icon draws either); none for any other name.
 std::optional<std::uint32_t> gameIconId(std::string_view name);
+
+/// (API 6) The longest image name nox.gameImage, gameImageSize and gameImageIndex look up (longer:
+/// none).
+inline constexpr std::size_t kGameImageMaxName = 64;
+/// (API 6) One of the game's pictures in the program's art: its size and its own draw offset (a
+/// GameImage draw at its size puts its top left at the point given plus this), in the UI's units.
+struct UiGameImageSize {
+    int w = 0, h = 0;
+    int offsetX = 0, offsetY = 0;
+};
 
 /// (Client level 8) A spinning thing now (ui_proto.hpp's kSpin: nox.setSpin): how many eighths of
 /// a turn it has gone round since it began (negative: the other way).
@@ -343,6 +398,11 @@ struct UiWindow {
     /// (API 4) This frame's hit areas (nox.hitArea, in its own units): a frameless window with any
     /// takes the mouse only inside them (windowTakes).
     std::vector<UiRect> hitAreas;
+    /// (API 6) Kept to the whole view (the margins' too) rather than the 640 x 480, at the size
+    /// asked (specW x specH) where it fits; and `cover`: the game's HUD pieces not drawn while open.
+    bool toView = false;
+    int specW = 0, specH = 0;
+    bool cover = false;
 };
 
 /// Whether `w` takes the mouse at (x, y) (the 640 x 480 units): inside its rectangle, and for a
@@ -365,6 +425,12 @@ public:
 
     /// How wide the program draws `text` (in the 640 x 480 units); unset: 6 a letter.
     void setTextWidth(std::function<int(std::string_view)> measure);
+    /// (Client level 14) The table the server's text overlay goes over (ui_proto.hpp's kTextSet and
+    /// kTextClear: nox.setText; StringTable::setOverlay, from the thread that runs the client): the
+    /// program's nox.csf, whose lookups then find the mode's texts first. Null: kept nowhere. A
+    /// table let go (another, or null) has its overlay cleared; the program sets null before its
+    /// table or this game goes.
+    void setStrings(strings::StringTable* table);
     /// Once a frame: the draw scales looked after (drawScales; a UI running or not), then (API 4)
     /// ui.tick, what the server sent handed to the UI, and each window drawn (windows()).
     void frame(std::uint64_t nowMs);
@@ -381,6 +447,18 @@ public:
     void setPlayer(std::optional<UiPlayer> player);
     /// (API 2) The thing types nox.thing names (unset: the client's).
     void setThings(const things::ThingDb* things);
+    /// (API 6) The video.bag index of thing.bin's named image `name` in the program's art: its
+    /// still (frame 0 alone) or its animation's frame `frame` (none: no such image or frame, or
+    /// not in the program's video.bag), for nox.gameImage, gameImageSize and gameImageIndex.
+    /// Unset: by the thing types' images alone (an image they name by name: none).
+    void setGameImageIndex(std::function<std::optional<std::int32_t>(std::string_view name, int frame)> index);
+    /// (API 6) The size and own draw offset of video.bag's image `index` in the program's art
+    /// (none: it hasn't it), for nox.gameImage and nox.gameImageSize. Unset: an index is never
+    /// there, a name is when the thing types' images list it, its size unknown (nox.gameImageSize nil).
+    void setGameImageSize(std::function<std::optional<UiGameImageSize>(std::int32_t index)> size);
+    /// (API 6) Whether a window opened with cover = true is open: the game's HUD pieces not drawn
+    /// nor taking the mouse. False with no UI running.
+    bool coversHud() const noexcept;
     /// (API 2) The sounds the UI asked for since the last call.
     std::vector<UiSound> takeSounds();
 
@@ -433,6 +511,10 @@ public:
     /// (ui_proto.hpp's kToBars: nox.putOnBars) since the last take, in order; at most kUiMaxToBars
     /// wait (more: let go). Whatever the UI's state (a mode with no UI sends them too).
     std::vector<uimsg::ToBars> takeToBars();
+    /// (Client level 15) The server's latest line about our character (ui_proto.hpp's
+    /// kCharacterNote: nox.characterNote) since the last take, as sent (untrusted: the program
+    /// cleans it); none when none came. Only the latest is kept. Whatever the UI's state.
+    std::optional<std::string> takeCharacterNote();
     /// (Client level 8) The things in a leap now (ui_proto.hpp's kLeap), each its height at the
     /// last frame()'s time: 4 h t (1 - t) from the message's arrival. A leap over is let go in
     /// frame(); a new one for the same thing replaces it.
@@ -480,7 +562,7 @@ public:
     bool running() const noexcept;
     const std::string& modeName() const noexcept;
     const std::string& error() const noexcept;
-    /// The running UI's API (1 to 4; 0: none running).
+    /// The running UI's API (1 to kUiApi; 0: none running).
     int api() const noexcept;
     /// How many UIs have started (each start one more): a UI running now that isn't the one that
     /// ran before (a stop and a start between two looks) has another number.

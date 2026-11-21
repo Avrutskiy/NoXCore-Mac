@@ -4,6 +4,7 @@
 #include "app.hpp"
 #include "backend_hooks.hpp"
 #include "effects_draw.hpp"
+#include "language_pick.hpp"
 #include "snapshot_pacing.hpp"
 
 #include "noxcore/io/file.hpp"
@@ -149,6 +150,22 @@ OptionsWindow::Extras loadExtras(const fs::path& gameDir)
             e.hdImages = on;
         } else if (name == "OriginalFonts") {
             e.originalFonts = on;
+        } else if (name == "CsfText") {
+            std::string v = line.substr(eq + 1);
+            std::erase_if(v, [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
+            v = nox::util::lowered(v);
+            // ("cp1251:N": the letters' shift forced too)
+            if (const auto colon = v.find(':'); colon != std::string::npos && v.substr(0, colon) == "cp1251") {
+                e.csfShift = std::clamp(std::atoi(v.c_str() + colon + 1), 0, 63);
+                v.resize(colon);
+            }
+            e.csfText = v == "cp1251" ? OptionsWindow::Extras::kCsfTextCp1251
+                        : v == "latin1" ? OptionsWindow::Extras::kCsfTextLatin1
+                                        : OptionsWindow::Extras::kCsfTextAuto;
+        } else if (name == "Language") {
+            std::string v = line.substr(eq + 1);
+            std::erase_if(v, [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
+            e.language = nox::util::lowered(v);
         } else if (name == "Gamma") {
             e.gamma = std::clamp(std::atoi(line.c_str() + eq + 1), 1, 10);
         } else if (name == "MouseAccel") {
@@ -173,6 +190,12 @@ OptionsWindow::Extras loadExtras(const fs::path& gameDir)
                                         OptionsWindow::kMouseSpeedMax);
         } else if (name == "PendingChanges") {
             e.pendingView = std::clamp(std::atoi(line.c_str() + eq + 1), 0, 2);
+        } else if (name == "CharactersModeOnlyHost") {
+            e.charactersModeOnlyHost = on;
+        } else if (name == "CharactersModeOnlyJoin") {
+            e.charactersModeOnlyJoin = on;
+        } else if (name == "CharactersModeOnlyLocal") {
+            e.charactersModeOnlyLocal = on;
         } else if (name == "WeatherEffects") {
             e.weather = std::clamp(std::atoi(line.c_str() + eq + 1), 0, 2);
         } else if (name.size() == 14 && name.starts_with("ModAbilityKey") && name[13] >= '1' && name[13] <= '4') {
@@ -197,7 +220,15 @@ void saveExtras(const App& app, const OptionsWindow::Extras& e)
         << "\nMouseSpeed = " << e.mouseSpeed << "\nMouseSpeed3D = " << e.mouseSpeed3D << "\nKillFeed = " << e.killFeed << "\nDisplay = " << e.display
         << "\nVSync = " << e.vsync << "\nServerUpdateRate = " << e.serverUpdateRate
         << "\nServerMapVote = " << e.serverMapVote << "\nExactMaths = " << e.exactMaths << "\nPendingChanges = " << e.pendingView
-        << "\nWeatherEffects = " << e.weather << "\n";
+        << "\nWeatherEffects = " << e.weather << "\nCharactersModeOnlyHost = " << e.charactersModeOnlyHost
+        << "\nCharactersModeOnlyJoin = " << e.charactersModeOnlyJoin << "\nCharactersModeOnlyLocal = " << e.charactersModeOnlyLocal << "\nCsfText = "
+        << (e.csfText == OptionsWindow::Extras::kCsfTextCp1251   ? (e.csfShift >= 0 ? "cp1251:" + std::to_string(e.csfShift) : std::string("cp1251"))
+            : e.csfText == OptionsWindow::Extras::kCsfTextLatin1 ? std::string("latin1")
+                                                                 : std::string("auto"))
+        << "\n";
+    if (!e.language.empty()) {
+        out << "Language = " << e.language << "\n"; // (only when set: an unset one stays chosen at start)
+    }
     for (std::size_t i = 0; i < e.modAbilityKeys.size(); ++i) {
         out << "ModAbilityKey" << (i + 1) << " = " << e.modAbilityKeys[i] << "\n";
     }
@@ -219,6 +250,9 @@ OptionsWindow::Extras currentExtras(const App& app)
     e.hdImages = app.sprites && app.sprites->usingPack();
     e.hdAvailable = !app.imagePack.empty();
     e.originalFonts = app.originalFonts;
+    e.csfText = app.csfText;
+    e.csfShift = app.csfShift;
+    e.language = app.language;
     e.gamma = app.gamma;
     e.gpu = app.shaders != nullptr && app.white != nullptr;
     e.mouseAccel = app.mouseAccel;
@@ -234,6 +268,13 @@ OptionsWindow::Extras currentExtras(const App& app)
     e.pendingView = static_cast<int>(app.pendingView);
     e.weather = app.weatherEffects;
     e.modAbilityKeys = app.modAbilityKeyNames;
+    const auto modeOnly = [&app](std::string_view screen) {
+        const auto it = app.charactersModeOnly.find(screen);
+        return it != app.charactersModeOnly.end() && it->second;
+    };
+    e.charactersModeOnlyHost = modeOnly("host");
+    e.charactersModeOnlyJoin = modeOnly("join");
+    e.charactersModeOnlyLocal = modeOnly("local");
     return e;
 }
 
@@ -424,6 +465,7 @@ void applyExtras(App& app, const OptionsWindow::Extras& e)
     app.pendingView = static_cast<nox::mapedit::PendingView>(std::clamp(e.pendingView, 0, 2));
     app.weatherEffects = std::clamp(e.weather, 0, 2);
     app.modAbilityKeyNames = e.modAbilityKeys;
+    app.charactersModeOnly = {{"host", e.charactersModeOnlyHost}, {"join", e.charactersModeOnlyJoin}, {"local", e.charactersModeOnlyLocal}};
     for (std::size_t i = 0; i < e.modAbilityKeys.size(); ++i) {
         const auto* key = nox::config::findKey(e.modAbilityKeys[i]);
         app.modAbilityKeys[i] = key ? key->code : 0;
@@ -452,8 +494,9 @@ void applyExtras(App& app, const OptionsWindow::Extras& e)
     // Use HD Images: the pack's images (upscaled ones and the originals), or video.bag's.
     if (app.sprites && e.hdImages != app.sprites->usingPack()) {
         if (e.hdImages && !app.imagePack.empty()) {
-            if (auto pack = SpriteCache::openPack(app.imagePack, app.gameDir / "video.idx")) {
-                app.sprites->setPack(std::move(pack), app.hdDecodeSync ? fs::path() : app.imagePack);
+            bool checkSources = false; // (another video.idx's pack with source keys: setPack checks each slot)
+            if (auto pack = SpriteCache::openPack(app.imagePack, app.gameDir / "video.idx", &checkSources)) {
+                app.sprites->setPack(std::move(pack), app.hdDecodeSync ? fs::path() : app.imagePack, checkSources);
                 preloadSession(app);
                 preloadMap(app, app.viewMap);
             }
@@ -465,6 +508,9 @@ void applyExtras(App& app, const OptionsWindow::Extras& e)
     // Original Style Fonts, and the HD Nox-style fonts with the HD images.
     app.originalFonts = e.originalFonts;
     applyFonts(app);
+    app.csfText = e.csfText; // (taken at start, with nox.csf: applyTextCodepage)
+    app.csfShift = e.csfShift;
+    app.language = e.language; // (taken at start: applyLanguage)
     if (!app.shaders || !app.white) {
         return;
     }
@@ -492,6 +538,41 @@ void applyFonts(App& app)
     if (app.fontFaces && app.font && app.largeFont) {
         app.fontFaces->apply(*app.font, *app.largeFont, app.originalFonts, app.sprites && app.sprites->usingPack());
     }
+}
+
+/// The program's text convention, once at start with nox.csf loaded (or not there): noxcore.cfg's
+/// CsfText, or with auto what nox.csf's letters said (App::csfGuess). Under Windows-1251 the table is
+/// decoded to real Cyrillic here, and the wire, .plr files and the lobby's text convert at their
+/// edges (nox::strings::toWire / fromWire). A changed CsfText takes effect at the next start.
+void applyTextCodepage(App& app)
+{
+    using nox::strings::LegacyCodepage;
+    std::optional<LegacyCodepage> forced;
+    if (app.csfText == OptionsWindow::Extras::kCsfTextCp1251) {
+        forced = LegacyCodepage::Cp1251;
+    } else if (app.csfText == OptionsWindow::Extras::kCsfTextLatin1) {
+        forced = LegacyCodepage::Latin1;
+    }
+    std::optional<std::uint8_t> shift;
+    if (app.csfShift >= 0) {
+        shift = static_cast<std::uint8_t>(app.csfShift);
+    }
+    const auto text = nox::strings::adoptLegacyCodepage(app.strings.get(), app.csfGuess, forced, shift);
+    if (text.plain()) {
+        SDL_Log("text: Latin-1 (as stored)");
+    } else {
+        SDL_Log("text: Windows-1251 (Cyrillic), letters shifted %d: nox.csf decoded; names, chat, .plr and lobby text "
+                "converted where they meet the original game",
+                text.shift);
+    }
+}
+
+/// NoX Core's own text's language, once at start after applyTextCodepage (language_pick.hpp):
+/// noxcore.cfg's Language, else nox.csf's, else the system's, else English. Before the menus and
+/// windows are built, so they are built in it.
+void applyLanguage(App& app)
+{
+    pickLanguage(app.language, app.strings.get(), nox::strings::wireCodepage());
 }
 
 /// Opens the Options window on the current settings (in a game the resolution stays).

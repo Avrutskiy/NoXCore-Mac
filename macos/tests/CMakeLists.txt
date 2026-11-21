@@ -14,6 +14,6 @@ target_include_directories(user_data_tests PRIVATE "${root}/macos" "${core}/incl
 add_test(NAME mac_user_data COMMAND user_data_tests)
 
 foreach(test IN ITEMS startup_tests user_data_tests)
-    target_sources(${test} PRIVATE "${root}/noxsdl/src/editor/ordered_json.cpp")
+    target_sources(${test} PRIVATE "${root}/noxsdl/src/editor/ordered_json.cpp" "${core}/src/strings/l10n.cpp")
     target_include_directories(${test} PRIVATE "${root}/noxsdl/src")
 endforeach()

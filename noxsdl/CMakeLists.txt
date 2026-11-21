@@ -27,6 +27,7 @@ add_library(noxsdl_editor_host STATIC
     src/editor/panel_textures.cpp
     src/editor/texture_mirror.cpp
     src/editor/theme.cpp
+    src/language_pick.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/embedded_font.cpp
 )
 target_include_directories(noxsdl_editor_host PUBLIC src) # (its headers: "editor/imgui_host.hpp" ...)
@@ -86,6 +87,8 @@ add_executable(noxsdl WIN32
     src/effects_objects.cpp
     src/effects_puffs.cpp
     src/game_cursor.cpp
+    src/game_data_swap.cpp
+    src/game_sounds.cpp
     src/game_session.cpp
     src/game_windows.cpp
     src/gpu_atlas.cpp
@@ -120,6 +123,8 @@ add_executable(noxsdl WIN32
     src/image_decoder.cpp
     src/menus.cpp
     src/mode_ui.cpp
+    src/campaign_line.cpp
+    src/character_play.cpp
     src/mods_folder.cpp
     src/menus_modes.cpp
     src/mode_list.cpp
@@ -204,6 +209,9 @@ add_custom_command(TARGET noxsdl POST_BUILD
             $<TARGET_FILE_DIR:noxsdl>/NotoSans-OFL.txt
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${caudex_license_SOURCE_DIR}/OFL.txt
             $<TARGET_FILE_DIR:noxsdl>/Caudex-OFL.txt
+    # (fonts/NotoSansKR-SemiBold-Hangul.ttf's: res/fonts holds Noto Sans KR's Hangul, subset)
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/res/NotoSansKR-OFL.txt
+            $<TARGET_FILE_DIR:noxsdl>/NotoSansKR-OFL.txt
     VERBATIM
 )
 # The Nox-style fonts (res/fonts: NoxDefault, NoxLarge and their HD forms) into the fonts folder
@@ -212,12 +220,26 @@ add_custom_command(TARGET noxsdl POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/res/fonts $<TARGET_FILE_DIR:noxsdl>/fonts
     VERBATIM
 )
+# The language files (res/lang: NoX Core's own text in other languages, noxsdl/l10n/l10n.py) into
+# the lang folder beside the exe, where the program looks for them (language_pick.hpp) and packages
+# take them. (Copied over each build, so a removed language's file stays until the folder is cleared.)
+add_custom_command(TARGET noxsdl POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/res/lang $<TARGET_FILE_DIR:noxsdl>/lang
+    VERBATIM
+)
 # The mods in mods/ (script modes) into the mods folder beside the exe, where a host finds them.
 # (Copied over each build: a mod edited there is replaced.)
 add_custom_command(TARGET noxsdl POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/mods $<TARGET_FILE_DIR:noxsdl>/mods
     VERBATIM
 )
+# A mod library's mods (NOX_MODS_LIBRARY, when set) into the same folder, after this tree's.
+if(NOX_MODS_LIBRARY_DIR)
+    add_custom_command(TARGET noxsdl POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${NOX_MODS_LIBRARY_DIR}/mods $<TARGET_FILE_DIR:noxsdl>/mods
+        VERBATIM
+    )
+endif()
 
 # Shaders for the GPU renderer (--gpu), from the same HLSL (shaders/), embedded in the exe
 # (src/gpu_shader_code.hpp lists them): DXIL for Direct3D 12 with dxc, the Windows SDK's; SPIR-V

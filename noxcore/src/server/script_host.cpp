@@ -131,15 +131,30 @@ void moveObject(World& world, const things::ThingDb& things, std::uint32_t frame
 
 BuiltinArity builtinArity(std::uint32_t id)
 {
+    if (script::inNoxBuiltinRange(id)) {
+        return {script::noxBuiltinArgs(id), script::noxBuiltinReturns(id)};
+    }
     return id < kSignatures.size() ? BuiltinArity{kSignatures[id].args, kSignatures[id].returns} : BuiltinArity{};
 }
+
+namespace {
+const script::ScriptFile kNoScript{}; // (what a refused map's host runs: nothing)
+} // namespace
 
 ScriptHost::ScriptHost(World& world, const things::ThingDb& things, const script::ScriptFile& file, std::uint32_t seed)
     : world_(world)
     , things_(things)
-    , vm_(file, *this)
+    , refused_(script::memoryTrickBuiltin(file))
+    , vm_(refused_ ? kNoScript : file, *this)
     , rng_(seed)
 {
+    if (refused_) {
+        // (A map host's GameHost refuses such a map before it loads; this keeps any other load,
+        // a bare Server's, from running it.)
+        notice("memory tricks", "its script calls builtin " + std::to_string(*refused_) +
+                                    " (past the game's 211 and outside NoX Core's own range): it uses memory tricks of the original game "
+                                    "that NoX Core does not run, so its script isn't started");
+    }
 }
 
 void ScriptHost::setLanguageGlobals()
@@ -212,6 +227,14 @@ void setScriptLog(std::function<void(const std::string&)> sink)
     g_scriptLog = std::move(sink);
 }
 
+void scriptLog(const std::string& line)
+{
+    const std::lock_guard lock(g_scriptLogMutex);
+    if (g_scriptLog) {
+        g_scriptLog(line);
+    }
+}
+
 void ScriptHost::logStop(std::uint32_t function)
 {
     using Stop = script::Vm::Stop;
@@ -257,6 +280,166 @@ void ScriptHost::logStop(std::uint32_t function)
     if (g_scriptLog) {
         g_scriptLog(line);
     }
+}
+
+// ---- NoX Core's own builtins, and a mod's calls of the map's functions
+
+void ScriptHost::notice(const std::string& key, const std::string& what)
+{
+    // Once per map for each key, kMaxNotices at most (a map that makes up names, "Wave" + n,
+    // can't fill the log).
+    if (noticed_.size() >= kMaxNotices || !noticed_.insert(key).second) {
+        return;
+    }
+    std::string line = "script: map " + (world_.mapName.empty() ? std::string("(unnamed)") : world_.mapName) + ": " + what +
+                       (noticed_.size() == kMaxNotices ? " (the last such line logged on this map)" : " (not logged again on this map)");
+    notices_.push_back(line);
+    const std::lock_guard lock(g_scriptLogMutex);
+    if (g_scriptLog) {
+        g_scriptLog(line);
+    }
+}
+
+void ScriptHost::unknownBuiltin(std::uint32_t id, std::size_t function)
+{
+    const auto& functions = vm_.file().functions;
+    const std::string fn = function < functions.size() ? functions[function].name : "function " + std::to_string(function);
+    notice("unknown " + std::to_string(function) + " " + std::to_string(id),
+           fn + " calls builtin " + std::to_string(id) + ", which no server has (past the game's 211 and outside NoX Core's own "
+           "range): nothing done, nothing popped");
+}
+
+int ScriptHost::noxBuiltin(std::uint32_t id, script::Vm& vm)
+{
+    // Its arguments popped as its id says (the last pushed first), its result pushed after.
+    const int n = script::noxBuiltinArgs(id);
+    std::array<std::uint32_t, 8> args{};
+    for (int i = n; i-- > 0;) {
+        args[static_cast<std::size_t>(i)] = vm.pop();
+    }
+    std::uint32_t result = 0;
+    if (id == script::kLuauCall || id == script::kLuauCallReturn) {
+        result = luauCall(id == script::kLuauCallReturn, std::span<const std::uint32_t, 5>(args.data(), 5));
+    } else {
+        notice("nox " + std::to_string(id), "builtin " + std::to_string(id) + " is a NoX Core builtin this server doesn't have (a map "
+               "made for a newer NoX Core?): its " + std::to_string(n) + " arguments popped, nothing done" +
+               (script::noxBuiltinReturns(id) ? ", 0 given" : ""));
+    }
+    if (script::noxBuiltinReturns(id)) {
+        vm.push(result);
+    }
+    return 0;
+}
+
+std::uint32_t ScriptHost::luauCall(bool wantsResult, std::span<const std::uint32_t, 5> args)
+{
+    // (Copied: the handler's own map calls may make strings, moving the VM's.)
+    const std::string name = vm_.string(args[0]);
+    const std::string what = std::string(wantsResult ? "LuauCallReturn" : "LuauCall") + "(\"" + name + "\")";
+    if (!world_.modeHooks) {
+        notice("nomod " + name, what + ": no mod hosts this game (a NoX Core mod's map played without it?): nothing done" +
+                                    std::string(wantsResult ? ", 0 given" : ""));
+        return 0;
+    }
+    if (mapCallDepth_ >= kMaxMapCallDepth) {
+        notice("deep " + name, what + ": LuauCalls nested " + std::to_string(kMaxMapCallDepth) +
+                                   " deep (a mod handler and a map function calling each other without end?): not made" +
+                                   std::string(wantsResult ? ", 0 given" : ""));
+        return 0;
+    }
+    MapCall call;
+    call.name = name;
+    std::copy(args.begin() + 1, args.end(), call.args.begin());
+    call.caller = vm_.caller();
+    call.trigger = vm_.trigger();
+    call.wantsResult = wantsResult;
+    ++mapCallDepth_;
+    // (Counted down even when the handler throws through.)
+    struct Depth {
+        int& n;
+        ~Depth() { --n; }
+    } depth{mapCallDepth_};
+    const std::optional<std::uint32_t> r = world_.modeHooks->mapCall(*this, call);
+    if (!r) {
+        notice("nohandler " + name, what + ": the mod has no handler of that name (its nox.onMapCall): nothing done" +
+                                        std::string(wantsResult ? ", 0 given" : ""));
+        return 0;
+    }
+    return *r;
+}
+
+ScriptHost::FunctionCall ScriptHost::callFunction(std::string_view name, std::span<const std::uint32_t> args)
+{
+    FunctionCall out;
+    const auto& functions = vm_.file().functions;
+    const auto index = vm_.file().find(name);
+    // (Function 0 is the object variables' layout and 1 GLOBAL's initialisers: never called so.)
+    if (!index || *index < 2) {
+        out.error = "the map's script has no function " + std::string(name);
+        return out;
+    }
+    const script::Function& fn = functions[*index];
+    if (fn.args > script::Vm::kStackWords) {
+        out.error = std::string(name) + " takes more arguments than the script's stack holds";
+        return out;
+    }
+    if (args.size() > fn.args) {
+        out.error = std::string(name) + " takes " + std::to_string(fn.args) + " argument" + (fn.args == 1 ? "" : "s") + ", not " +
+                    std::to_string(args.size());
+        return out;
+    }
+    // Value i into parameter i (its local word i, as the compiler lays them out; those left out
+    // 0): the VM pops the last pushed into word 0, so the last parameter's is pushed first. (A
+    // script's own call binds the same way: the compiler pushes its arguments last first, so
+    // argument i is parameter i's there too.)
+    const bool nested = vm_.running();
+    for (std::size_t i = fn.args; i-- > 0;) {
+        vm_.push(i < args.size() ? args[i] : 0u);
+    }
+    const std::uint32_t caller = nested ? vm_.caller() : 0;
+    const std::uint32_t trigger = nested ? vm_.trigger() : 0;
+    out.ran = run(static_cast<std::uint32_t>(*index), caller, trigger);
+    if (out.ran && fn.returns != 0) {
+        out.result = vm_.pop();
+    }
+    if (!nested) {
+        // A call of its own: nothing waits on its words, and its strings go as a handler's do.
+        vm_.resetStack();
+        vm_.freeRuntimeStrings();
+    }
+    return out;
+}
+
+ScriptHost::FunctionCall ScriptHost::callHandler(std::uint32_t function, std::uint32_t caller, std::uint32_t trigger)
+{
+    FunctionCall out;
+    const auto& functions = vm_.file().functions;
+    if (function < 2 || function >= functions.size()) {
+        out.error = "the map's script has no function " + std::to_string(function);
+        return out;
+    }
+    const script::Function& fn = functions[function];
+    if (fn.args > script::Vm::kStackWords) {
+        out.error = fn.name + " takes more arguments than the script's stack holds";
+        return out;
+    }
+    const bool nested = vm_.running();
+    const std::uint32_t outerCaller = vm_.caller();
+    const std::uint32_t outerTrigger = vm_.trigger();
+    for (std::size_t i = fn.args; i-- > 0;) {
+        vm_.push(0u);
+    }
+    out.ran = run(function, caller, trigger);
+    if (out.ran && fn.returns != 0) {
+        out.result = vm_.pop();
+    }
+    if (nested) {
+        vm_.restoreCallerTrigger(outerCaller, outerTrigger);
+    } else {
+        vm_.resetStack();
+        vm_.freeRuntimeStrings();
+    }
+    return out;
 }
 
 std::optional<std::uint32_t> ScriptHost::callBlock(ServerObject::ScriptBlock& block, std::uint32_t caller, std::uint32_t trigger)
@@ -630,6 +813,10 @@ void ScriptHost::setObjectVar(std::int32_t word, std::uint32_t value)
 
 int ScriptHost::builtin(std::uint32_t id, script::Vm& vm)
 {
+    // (NoX Core's own builtins: their own range, never the game's nor the mode's builtin hook's.)
+    if (script::inNoxBuiltinRange(id)) {
+        return noxBuiltin(id, vm);
+    }
     // (noxcpp: a mode's answer first; none, the game's.)
     if (world_.modeHooks) {
         if (const std::optional<int> r = world_.modeHooks->builtin(*this, id, vm)) {

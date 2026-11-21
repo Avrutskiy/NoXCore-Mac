@@ -3,6 +3,9 @@
 
 #include "noxcore/modes/script/mod_records.hpp"
 #include "noxcore/modes/script/scripted_mode.hpp"
+#include "noxcore/lobby/extended.hpp"
+#include "noxcore/server/mode_data.hpp"
+#include "noxcore/server/mode_maps.hpp"
 #include "noxcore/util/text.hpp"
 
 #include "mod_generate.hpp"
@@ -75,9 +78,53 @@ ModsReport loadMods(const fs::path& modsDir, Registry& registry)
                 continue;
             }
         }
+        // The maps it ships (maps\<Name>\<Name>.map), indexed once here: its games find them before
+        // the game's maps folder, no other game does. A folder left out is said, the mod still loads.
+        if (fs::is_directory(folder / "maps", ec)) {
+            std::vector<std::string> problems;
+            package->maps = server::ModeMaps::index(folder / "maps", &problems);
+            for (std::string& p : problems) {
+                report.notes.push_back({folder, std::move(p)});
+            }
+        }
+        // The game data files it ships (data\thing.bin ...), read and checked once here: its games
+        // read them in place of the install's. A bad one refuses the mod; a file of another name
+        // is said and left out. Those a client reads make it NoX Core-only (said in the report).
+        {
+            std::string why;
+            std::vector<std::string> notes;
+            package->data = server::ModeData::read(folder / "data", why, &notes);
+            for (std::string& n : notes) {
+                report.notes.push_back({folder, std::move(n)});
+            }
+            if (!why.empty()) {
+                report.broken.push_back({folder, why});
+                continue;
+            }
+            if (package->data) {
+                std::string names;
+                bool client = false;
+                for (const things::DataFileBytes& f : package->data->files()) {
+                    names += (names.empty() ? "" : ", ") + std::string(things::dataFileName(f.kind));
+                    client = client || things::clientReadsDataFile(f.kind);
+                }
+                report.notes.push_back(
+                    {folder, "its own game data (" + names + ") read in place of the install's in its games" +
+                                 (client ? std::string("; NoX Core players of level ") + std::to_string(lobby::kGameDataLevel) +
+                                               " and above only (stockClients false: stock players held out, older NoX Core refused)"
+                                         : std::string())});
+                if (client) {
+                    package->manifest.refuseStock = true;
+                    package->manifest.info.stockClients = false;
+                }
+            }
+        }
         Mode m;
         m.info = package->manifest.info;
         m.info.fromMods = true; // (not built into the program: the lists show it after those that are)
+        m.maps = package->maps; // (a campaign's first map found from the menus: the same index)
+        m.data = package->data; // (its host reads its games' tables from them: gameDataFor)
+        m.folder = folder;      // (its saves\: its players' saves, never read as the mod: mode.hpp's kModSavesFolder)
         m.makeServer = [package](const ServerContext& ctx) { return std::make_unique<script::ScriptedMode>(package, ctx); };
         // Its records, for a host that keeps a mode's records (its games' nox.records): <id>_records.txt
         // in the folder the host names. Nothing is written till the script puts a row.
@@ -137,6 +184,9 @@ std::vector<std::string> modsReportLines(const ModsReport& report)
     }
     for (const ModsReport::Broken& b : report.broken) {
         out.push_back("mods: " + b.folder.filename().string() + ": " + b.why);
+    }
+    for (const ModsReport::Broken& n : report.notes) {
+        out.push_back("mods: " + n.folder.filename().string() + ": " + n.why);
     }
     return out;
 }

@@ -3,7 +3,8 @@
 -- editor's Luau diagnostics and its Mod Reference panel. Each function: one "--- " doc line, then
 -- its declaration on one line.
 
-type NoxPlayer = { peer: number, name: string, unit: number, identified: boolean, clientKey: string?, account: string?, class: string?, level: number?, experience: number? }
+-- language: its client's UI language ("en", "ru", "ko"...: a NoX Core client of level 14), else the host's own.
+type NoxPlayer = { peer: number, name: string, unit: number, identified: boolean, clientKey: string?, language: string, account: string?, class: string?, level: number?, experience: number? }
 type NoxItemSpec = { effectiveness: string?, material: string?, primary: string?, secondary: string?, durability: number?, charges: number? }
 type NoxItemFacts = { type: string, effectiveness: string?, material: string?, primary: string?, secondary: string?, durability: number, maxDurability: number, charges: number, maxCharges: number, worn: boolean, holder: number? }
 -- text and identify: desc's and IDENTIFYDESC's words from the string table (none without nox.csf); effects: each effect's number by its function's name.
@@ -13,7 +14,7 @@ type NoxModifier = { name: string, section: string, position: string, color: { r
 -- damageCoefficient); damageType: a melee swing's; armor: an armour record's ARMOR_VALUE (the fraction it takes off);
 -- classes: who may use or wear it (a multiclass player: anything).
 type NoxItemStats = { type: string, name: string?, durability: number, charges: number, damageMin: number?, damageCoefficient: number?, requiredStrength: number?, range: number?, damageType: string?, armor: number?, classes: { warrior: boolean, wizard: boolean, conjurer: boolean } }
-type NoxEvents = { death: number, destroyed: number, damage: number, damaged: number, drop: number, equip: number }
+type NoxEvents = { death: number, destroyed: number, damage: number, damaged: number, drop: number, equip: number, use: number, pickup: number }
 type NoxWeather = { kind: string, strength: number?, wind: { angle: number?, speed: number? }?, fade: number? }
 type NoxGenerate ={ map: string, module: string?, fn: string?, params: any?, arena: { [string]: any }?, seed: number?, title: string?, ahead: boolean? }
 type NoxStore = {
@@ -38,14 +39,21 @@ type NoxMonsterInfo = { experience: number, health: number, questHealth: number,
 type NoxSpellInfo = { flags: number, onceOnly: boolean, manaCost: number, trapCost: number }
 type NoxTeam = { id: number, name: string, score: number, colour: number, players: number }
 type NoxStream = { next: (self: NoxStream) -> number }
+-- A map script's LuauCall(name, a, b, c, d) as its handler gets it: call[1] to call[4] the four values as signed 32-bit ints (0: left out),
+-- caller and trigger the script's caller and trigger now (ids; nil: none); its methods read value n (1-4) as an int, a float (its bits),
+-- a thing (the map's handle: -1 caller, -2 trigger, else a script id; its id, nil none) or a string (the map's string of that id; nil none).
+-- object and string only while the handler runs.
+type NoxMapCall = { name: string, caller: number?, trigger: number?, [number]: number,
+    int: (self: NoxMapCall, n: number) -> number, float: (self: NoxMapCall, n: number) -> number,
+    object: (self: NoxMapCall, n: number) -> number?, string: (self: NoxMapCall, n: number) -> string? }
 
 declare nox: {
     --- # Players and messages
     --- Writes a line to the host's log.
     log: (text: string) -> (),
-    --- The players in the game now, as { peer, name, unit, identified } tables.
+    --- The players in the game now, as { peer, name, unit, identified, language } tables.
     players: () -> { NoxPlayer },
-    --- One player by its peer as { peer, name, unit, identified }; nil when no such player is in.
+    --- One player by its peer as { peer, name, unit, identified, language }; nil when no such player is in.
     player: (peer: number) -> NoxPlayer?,
     --- A mode option's value as text (mode.json's options, as the host set them); nil when unset.
     option: (key: string) -> string?,
@@ -61,6 +69,13 @@ declare nox: {
     tell: (unit: number, text: string, colour: { [any]: number }?) -> (),
     --- A text line to everyone as the engine broadcasts one (250 characters at most); colour as nox.tell's.
     textToAll: (text: string, colour: { [any]: number }?) -> (),
+    --- # The text overlay
+    --- A string-table key's text ("Journal:<name>", "thing.db:<name>PrettyName", an ability's title, a key of the mode's own), one for everyone or { en = , ru = , ko = ... } each NoX Core client of level 14 gets in its language (English, else the first, for one it hasn't; with others = "own" in the table, { ru = "...", others = "own" }, a player whose language isn't given keeps its own text for the key instead, as if the mode hadn't set it): its journal, story dialogs, item names and descriptions, ability titles and tooltips show it in place of nox.csf's, in order with the game's messages; nil takes it away. Stock and older clients keep nox.csf's. A story dialog's speaker name and a shop window's title ("NPC:<script name>", which the server looks up itself) are the key's text in each player's language (its first 31 letters, the shop's 24), for every client (stock and older ones in the host's language). 64 bytes a key, 4096 a text; false when 512 keys or 64 KB are kept already.
+    setText: (key: string, text: (string | { [string]: string })?) -> boolean,
+    --- The overlay's keys starting with prefix (no case) gone, nox.csf's shown again; nil or "": every one.
+    clearText: (prefix: string?) -> (),
+    --- A story dialog as the map's TellStory opens one, from npc (a creature) to a player's unit, its text a key (31 bytes; nox.setText's or nox.csf's), the speaker's name given (nil: the NPC's own, nox.setText's "NPC:<name>" first); false, nothing told, when the key is nox.setText's and the player's client can't show it (stock, or below level 14: tell it a line instead).
+    tellStory: (unit: number, npc: number, key: string, speaker: string?) -> boolean,
     --- # Views (say, choice, table)
     --- Says a line to one player: a say view to its UI, else a text line.
     say: (peer: number, text: string) -> (),
@@ -79,7 +94,7 @@ declare nox: {
     units: () -> { number },
     --- What a thing carries, as { id, type, flag } tables.
     inventory: (id: number) -> { NoxItem },
-    --- Sends the thing's touches to mode.collide from now on, instead of its own collide.
+    --- Sends the thing's touches to mode.collide from now on, instead of its own collide (a missile's too: what it hits, a wall, its running out).
     watchCollide: (id: number) -> (),
     --- Puts a thing from the ground into a player's unit's inventory, as a pickup does.
     take: (unit: number, item: number) -> (),
@@ -166,6 +181,8 @@ declare nox: {
     setPoison: (unit: number, level: number, frames: number?) -> (),
     --- A gamedata.bin number as this game reads it (index from 0); nil for a name it hasn't.
     gameNumber: (name: string, index: number?) -> number?,
+    --- Sets a gamedata.bin number (the line this game reads; index from 0, within its table) for this map alone, read from then on wherever the game reads it (one read as a thing is made or at the map's load keeps what it was); each map loads with the install's numbers, and nothing is saved or sent (clients keep their own: a stock ability's cooldown shading, say). Whether there was such a number.
+    setGameNumber: (name: string, value: number, index: number?) -> boolean,
     --- Whether no wall stands between two points; blocked by a wall, also where it met it and its cell.
     traceRay: (x1: number, y1: number, x2: number, y2: number, flags: number) -> (boolean, number?, number?, number?, number?),
     --- Looses a missile of a type from the owner's edge in a direction; its id, nil when a wall is in the way.
@@ -224,6 +241,10 @@ declare nox: {
     setCollide: (id: number, name: string) -> (),
     --- Brings a watching (observing, not dead) player's unit back into play as the quest does.
     backIntoPlay: (unit: number) -> (),
+    --- on: puts a player out of play watching (unseen, out of reach), held out (its Action never brings it in), its camera the mode's (nox.camera; where it is till then) and no "observation mode" told; off: back into play as nox.backIntoPlay brings it, the hold let go (as it is when anything else brings it into play: a later watch is a free one).
+    observe: (unit: number, on: boolean) -> (),
+    --- Holds a watching player's camera (the view it's sent and where it hears from) at (x, y), or on a thing (thingOrX alone: following it while it's in the world), so its own controls no longer move it; nil lets it go (the stock observer's controls again).
+    camera: (unit: number, thingOrX: number?, y: number?) -> (),
     --- The spot beside a soul gate where its fallen come back.
     nearSoulGate: (gate: number) -> (number, number),
     --- A present thing's x, y and radius (an error when it isn't present).
@@ -265,6 +286,8 @@ declare nox: {
     setAbility: (unit: number, ability: number, level: number, report: boolean?, show: boolean?) -> (),
     --- Puts a spell ("spell": its name or number) or an ability ("ability": 1-5) the player knows on its client's spell bars quietly: the first empty slot, only where no slot holds it (nothing moved or doubled), no book, sound, sparks or line. Sent once the player is in play and every revoke owed to it (nox.revoke) has gone. Whether it will be sent (false: not known, or a client below client level 10 or without the mode UI: nothing sent).
     putOnBars: (unit: number, kind: "spell" | "ability", what: string | number) -> boolean,
+    --- A line about the player's character ("level 12, act 3"), which its NoX Core client keeps beside the character it joined with and shows next to it on its character screens. Plain text, cut to 80 bytes, control characters dropped; "" takes it away; the same line again is sent once. Whether it was sent (false: a stock client, one below client level 15 or without the mode UI: nothing sent).
+    characterNote: (unit: number, text: string) -> boolean,
     --- A player's field guide: for each creature 1-40, whether it has it.
     fieldGuide: (unit: number) -> { boolean },
     --- Puts a creature (its guide number 1-40 or its type's name) in a player's field guide as a found guide does; with notify, the player and the others told. Whether it was put in (false: already known, or no such creature).
@@ -399,7 +422,7 @@ declare nox: {
     --- Gives a player experience as a kill does (levels gained with it).
     giveExperience: (unit: number, amount: number) -> (),
     --- # Events and timers
-    --- The event bits for nox.watchEvents: death, destroyed, damage, damaged, drop, equip.
+    --- The event bits for nox.watchEvents: death, destroyed, damage, damaged, drop, equip, use (onUse), pickup (onTryPickup).
     events: NoxEvents,
     --- Sets which events a thing sends the mode's hooks (a sum of nox.events); its old bits.
     watchEvents: (id: number, mask: number) -> number,
@@ -417,6 +440,15 @@ declare nox: {
     store: NoxStore?,
     --- The mode's records on a host that keeps them (rows of at most 16 named numbers or texts, stamped with the time they were put; nil when this host keeps none).
     records: NoxRecords?,
+    --- # The map's script (NoX Core maps a mod ships)
+    --- Runs fn(call) for the map script's LuauCall(name, ...) and LuauCallReturn(name, ...), at once inside the map's call (what fn returns, a number, true or false, or nox.mapObject's, is LuauCallReturn's result; else 0); nil takes it away. Register at the script's top level: a reload's code registers its own.
+    onMapCall: (name: string, fn: ((call: NoxMapCall) -> any)?) -> (),
+    --- Calls the map script's own function by name with whole numbers, the first for its first parameter (true and false: 1 and 0; those left out 0); what it returns as an int, nil when it returns nothing. While the map's script runs (inside a LuauCall's handler, or a hook the engine calls from inside one of its builtins: onKill for a kill its Damage made) it runs nested with that call's caller and trigger (8 LuauCalls deep at most); else as a timer's, with none. An error for a name the map hasn't, too many values, or inside an asked hook.
+    callMapFunction: (name: string, ...(number | boolean)) -> number?,
+    --- Calls the map script's function (its name, or its value as the script holds a function: its index) as the engine calls an object's script handler: self (GetTrigger) and other (GetCaller) the things given (ids; nil: none), its parameters 0; what it returns as an int, nil when it returns nothing. Nested as callMapFunction's while the map's script runs (that call's own self and other back after it). An error for a function the map hasn't, a thing that's gone, or inside an asked hook.
+    callMapHandler: (fn: string | number, self: number?, other: number?) -> number?,
+    --- A thing as the map script names it (its script id, what Object("name") gives there): for a LuauCallReturn's result or a map function's value; nil when it's gone.
+    mapObject: (id: number) -> number?,
     --- # Generated maps
     --- Builds one of the mod's own maps: ahead (default) on a worker, onGenerated tells; or now, its result back.
     generate: (request: NoxGenerate) -> (boolean, any),
@@ -467,6 +499,8 @@ declare function require(name: string): any
 --- @hook onPickup(taker, item, x, y) | Something picked an item up from (x, y).
 --- @hook onDrop(holder, item) | A holder dropped a watched item.
 --- @hook onEquip(unit, item, worn) | A watched item was put on (true) or taken off.
+--- @hook onUse(user, item) | An item with nox.events.use used (a held item's use, a book read as it's picked up, food a creature eats), at once, in place of its own USE: return true to have that run as well, after.
+--- @hook onTryPickup(taker, item) | An item with nox.events.pickup about to be picked up (past the game's checks), at once, in place of its own pickup: return true to have it picked up as the game would; else it stays where it is.
 --- @hook onSpellCast(caster, spell, target, x, y, made) | A spell was cast (its name; target nil: none; made: what was made while it went off, its missiles or creature and anything its kills made at once, not what comes on later frames, oldest first, nil: none; normally heard before its missiles first fly, but after a host stall they may have flown a frame at their type's size).
 --- @hook onExit(exit, player) | A player touched an exit: return false to hold them; changes nothing in the world.
 --- @hook castCost(caster, spell, cost, how) | A player's spell's price before it's paid (cost: the game's mana; how "cast", or "trap": into a glyph's trap, at its check and as it's paid): return mana, health (health a plain loss, never to below 1; short of either: refused, as short of mana; given back where the game gives a cast's price back) or nil for the game's; changes nothing in the world.

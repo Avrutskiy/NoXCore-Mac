@@ -42,6 +42,7 @@ target_sources(noxmodes PRIVATE
     script/src/manifest.cpp
     script/src/mod_abilities.cpp
     script/src/mod_assets.cpp
+    script/src/mod_camera.cpp
     script/src/mod_draw_scale.cpp
     script/src/mod_events.cpp
     script/src/mod_generate.cpp
@@ -51,6 +52,7 @@ target_sources(noxmodes PRIVATE
     script/src/mod_records.cpp
     script/src/mod_scheduler.cpp
     script/src/mod_store.cpp
+    script/src/mod_texts.cpp
     script/src/mod_weather.cpp
     script/src/mods.cpp
     script/src/script_data.cpp

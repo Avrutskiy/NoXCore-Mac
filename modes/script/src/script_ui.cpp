@@ -6,6 +6,7 @@
 #include "noxcore/modes/script/manifest.hpp"
 #include "noxcore/modes/script/ui_proto.hpp"
 #include "noxcore/modes/script/weather.hpp"
+#include "noxcore/strings/string_table.hpp"
 #include "noxcore/things/object_class.hpp"
 #include "noxcore/things/spell_ids.hpp"
 #include "noxcore/things/thing_db.hpp"
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <deque>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <string_view>
 #include <utility>
@@ -56,6 +58,13 @@ int sparkBurstSize(const ::nox::things::ThingDef& def)
     const std::string arg(c->substr(kSpark.size() + 1));
     return std::atoi(arg.c_str()) & 0xFF;
 }
+
+/// (API 6) One of the game's pictures as nox.gameImage names it: video.bag's image `index`
+/// (index >= 0), else thing.bin's named image `name`.
+struct GamePic {
+    std::string_view name;
+    std::int32_t index = -1;
+};
 
 } // namespace
 
@@ -129,6 +138,8 @@ struct ScriptUiClient::Impl {
     std::vector<uimsg::TextLine> textLines;
     /// (Client level 10) The quiet bar fills the server asked for, not yet taken (at most kUiMaxToBars).
     std::vector<uimsg::ToBars> toBars;
+    /// (Client level 15) The server's latest line about our character (kCharacterNote), not yet taken.
+    std::optional<std::string> characterNote;
     /// (Client level 8) The leaps told (kLeap), each from the frame time it came at.
     struct LeapNow {
         std::uint16_t object = 0;
@@ -172,11 +183,63 @@ struct ScriptUiClient::Impl {
     /// The view's margins past the 640 x 480 (setViewMargins), in whole units: what an anchored
     /// window is moved by.
     int marginX = 0, marginY = 0;
-    /// `w` at its place: nox.window's, moved to its anchor's edges.
+    /// `w` at its place: nox.window's, moved to its anchor's edges; (API 6) kept whole on the view,
+    /// at the size asked where it fits.
     void anchor(UiWindow& w) const
     {
         w.x = w.specX + w.anchorX * marginX;
         w.y = w.specY + w.anchorY * marginY;
+        if (!w.toView) {
+            return;
+        }
+        // (The view: the 640 x 480 and the margins past it. A framed window's frame and title on it
+        // too, as a 640 x 480 one's are.)
+        const int left = -marginX, top = -marginY, right = 640 + marginX, bottom = 480 + marginY;
+        const int inX = w.frame ? 4 : 0, inTop = w.frame ? 20 : 0, inBottom = w.frame ? 4 : 0;
+        w.w = std::clamp(w.specW, w.frame ? 32 : 1, right - left - 2 * inX);
+        w.h = std::clamp(w.specH, w.frame ? 16 : 1, bottom - top - inTop - inBottom);
+        w.x = std::clamp(w.x, left + inX, right - inX - w.w);
+        w.y = std::clamp(w.y, top + inTop, bottom - inBottom - w.h);
+    }
+    /// (API 6) nox.gameImage's hooks (setGameImageIndex, setGameImageSize).
+    std::function<std::optional<std::int32_t>(std::string_view, int)> gameImageIndex;
+    std::function<std::optional<UiGameImageSize>(std::int32_t)> gameImageSize;
+    /// (API 6) video.bag's index of the named image's still (frame 0 alone) or its animation's
+    /// frame `frame`; none: none (unset hook: by the thing types' images, a ref by name none).
+    std::optional<std::int32_t> namedImageIndex(std::string_view name, int frame) const
+    {
+        if (gameImageIndex) {
+            return gameImageIndex(name, frame);
+        }
+        const ::nox::things::ThingDb* db = things();
+        const ::nox::things::ImageDef* def = db ? db->findImage(name) : nullptr;
+        const ::nox::things::ImageRef* ref = nullptr;
+        if (def && def->image) {
+            ref = frame == 0 ? &*def->image : nullptr;
+        } else if (def && def->animation && frame >= 0 && static_cast<std::size_t>(frame) < def->animation->frames.size()) {
+            ref = &def->animation->frames[static_cast<std::size_t>(frame)];
+        }
+        return ref && ref->index >= 0 ? std::optional<std::int32_t>(ref->index) : std::nullopt;
+    }
+    /// (API 6) The size of the game's picture `pic` in the program's art; none: not there, or
+    /// no size hook.
+    std::optional<UiGameImageSize> pictureSize(const GamePic& pic) const
+    {
+        if (!gameImageSize) {
+            return std::nullopt;
+        }
+        const std::optional<std::int32_t> index = pic.index >= 0 ? std::optional<std::int32_t>(pic.index) : namedImageIndex(pic.name, 0);
+        return index ? gameImageSize(*index) : std::nullopt;
+    }
+    /// (API 6) Whether the game's picture `pic` is there to draw (no size hook: a name the thing
+    /// types' images list; an index never).
+    bool pictureThere(const GamePic& pic) const
+    {
+        if (gameImageSize) {
+            return pictureSize(pic).has_value();
+        }
+        const ::nox::things::ThingDb* db = things();
+        return pic.index < 0 && db && db->findImage(pic.name);
     }
     /// (API 5) nox.hudReserve's box, as given (its anchor moves it as a window's).
     struct Reserve {
@@ -200,8 +263,33 @@ struct ScriptUiClient::Impl {
     // came in (another load since: none, till the server tells it again).
     wx::Told told;
     std::uint32_t toldAtLoad = 0;
+    // (Client level 14) The text overlay's table (setStrings: the program's nox.csf; null: the
+    // texts kept nowhere), and a long text's pieces so far (kTextMore).
+    strings::StringTable* overlayTable = nullptr;
+    std::string textKey, textSoFar;
 
     Impl(client::HeadlessClient* c, LuauVm::Limits l) : client(c), limits(l) {}
+
+    /// A kTextSet's piece: a whole text (its last piece) set over the table's.
+    void textPiece(uimsg::TextPiece&& t)
+    {
+        if (t.key != textKey) {
+            textSoFar.clear(); // (pieces of another key's text: a new text begins)
+        }
+        textKey = std::move(t.key);
+        if (textSoFar.size() + t.text.size() <= uimsg::kMaxTextValueBytes) {
+            textSoFar += t.text;
+        }
+        if (t.more) {
+            return;
+        }
+        if (overlayTable) {
+            // (kMaxTextKeys at most: a host that isn't ours sending endless new keys is let go.)
+            overlayTable->setOverlay(textKey, strings::fromUtf8(textSoFar), uimsg::kMaxTextKeys);
+        }
+        textKey.clear();
+        textSoFar.clear();
+    }
 
     /// The weather now: none once a map has loaded since it was told.
     const wx::Told& weatherNow()
@@ -567,8 +655,21 @@ int uiWindow(lua_State* L)
         w.clickThrough = flag("clickThrough", false);
         w.hud = flag("hud", false);
         readAnchor(L, 2, w.anchorX, w.anchorY);
+        if (impl.runningApi >= 6) {
+            // (API 6: cover; and its place and size kept to the whole view by anchor().)
+            lua_getfield(L, 2, "cover");
+            luaL_argcheck(L, lua_isnil(L, -1) || lua_isboolean(L, -1), 2, "cover is a boolean");
+            w.cover = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+            w.toView = true;
+        }
     }
-    if (w.frame) {
+    if (w.toView) {
+        w.specW = std::clamp(field("w", 160), 1, 100000);
+        w.specH = std::clamp(field("h", 100), 1, 100000);
+        w.specX = field("x", 20);
+        w.specY = field("y", 40);
+    } else if (w.frame) {
         // (On the screen whole, and no smaller than its frame's title needs.)
         w.w = std::clamp(field("w", 160), 32, 600);
         w.h = std::clamp(field("h", 100), 16, 440);
@@ -581,8 +682,10 @@ int uiWindow(lua_State* L)
         w.x = std::clamp(field("x", 20), 0, 640 - w.w);
         w.y = std::clamp(field("y", 40), 0, 480 - w.h);
     }
-    w.specX = w.x;
-    w.specY = w.y;
+    if (!w.toView) {
+        w.specX = w.x;
+        w.specY = w.y;
+    }
     impl.anchor(w);
     const auto it = std::ranges::find(impl.windows, w.id, &UiWindow::id);
     if (it != impl.windows.end()) {
@@ -598,6 +701,10 @@ int uiWindow(lua_State* L)
         it->anchorY = w.anchorY;
         it->specX = w.specX;
         it->specY = w.specY;
+        it->toView = w.toView;
+        it->specW = w.specW;
+        it->specH = w.specH;
+        it->cover = w.cover;
     } else {
         luaL_argcheck(L, static_cast<int>(impl.windows.size()) < kMaxWindows, 1, "at most 8 windows");
         impl.windows.push_back(std::move(w));
@@ -742,6 +849,11 @@ int uiThing(lua_State* L)
     d.index = static_cast<int>(def - db->things.data()) + 1; // (its net type id)
     d.x = static_cast<float>(luaL_checknumber(L, 2));
     d.y = static_cast<float>(luaL_checknumber(L, 3));
+    if (impl.runningApi >= 6 && !lua_isnoneornil(L, 4)) {
+        // (API 6) The box it's fitted into, its shape kept (no height: a square).
+        d.w = clampedFloat(luaL_checknumber(L, 4), 0, 4096, 0);
+        d.h = lua_isnoneornil(L, 5) ? d.w : clampedFloat(luaL_checknumber(L, 5), 0, 4096, 0);
+    }
     w.draws.push_back(std::move(d));
     return 0;
 }
@@ -1052,6 +1164,210 @@ int uiHitArea(lua_State* L)
     return 0;
 }
 
+// ---- UI API 6
+
+/// A game picture's draw pushed (the caller has checked it's there), the draws' cap checked.
+void pushGameImage(lua_State* L, UiWindow& w, const GamePic& pic, float x, float y, float dw, float dh)
+{
+    if (w.draws.size() >= kMaxDraws) {
+        luaL_error(L, "over %d draws in a window in one frame", static_cast<int>(kMaxDraws));
+    }
+    UiDraw d;
+    d.kind = UiDraw::Kind::GameImage;
+    if (pic.index >= 0) {
+        d.index = pic.index;
+    } else {
+        d.text.assign(pic.name);
+    }
+    d.x = x;
+    d.y = y;
+    d.w = dw;
+    d.h = dh;
+    w.draws.push_back(std::move(d));
+}
+
+/// (API 6) A game picture argument: a name (kGameImageMaxName bytes at most), or a whole number:
+/// video.bag's image of that index. False: neither (an empty or longer name, a negative or
+/// fractional number); any other type is an error.
+bool gamePicArg(lua_State* L, int arg, GamePic& pic)
+{
+    if (lua_type(L, arg) == LUA_TNUMBER) {
+        const double v = lua_tonumber(L, arg);
+        if (!(v >= 0 && v <= static_cast<double>(std::numeric_limits<std::int32_t>::max())) || v != std::floor(v)) {
+            return false;
+        }
+        pic.index = static_cast<std::int32_t>(v);
+        return true;
+    }
+    size_t n = 0;
+    const char* s = luaL_checklstring(L, arg, &n);
+    if (n == 0 || n > kGameImageMaxName) {
+        return false;
+    }
+    pic.name = std::string_view(s, n);
+    return true;
+}
+
+int uiGameImage(lua_State* L)
+{
+    // nox.gameImage(name, x, y [, w, h]): one of the game's own pictures, by name or by its
+    // video.bag index; whether it's drawn (not in the client's art: nothing, false).
+    UiWindow& w = drawingWindow(L);
+    const Impl& impl = implOf(L);
+    GamePic pic;
+    const bool named = gamePicArg(L, 1, pic);
+    constexpr float kFar = 100000;
+    const float x = clampedFloat(luaL_checknumber(L, 2), -kFar, kFar, 0);
+    const float y = clampedFloat(luaL_checknumber(L, 3), -kFar, kFar, 0);
+    const float dw = clampedFloat(luaL_optnumber(L, 4, 0), 0, 4096, 0);
+    const float dh = clampedFloat(luaL_optnumber(L, 5, 0), 0, 4096, 0);
+    if (!named || !impl.pictureThere(pic)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    pushGameImage(L, w, pic, x, y, dw, dh);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+int uiGameImageSize(lua_State* L)
+{
+    // nox.gameImageSize(name): its width, height and own draw offset in the client's art (a name
+    // or an index); nil: not there.
+    const Impl& impl = implOf(L);
+    GamePic pic;
+    if (!gamePicArg(L, 1, pic)) {
+        return 0;
+    }
+    const auto size = impl.pictureSize(pic);
+    if (!size) {
+        return 0;
+    }
+    lua_pushinteger(L, size->w);
+    lua_pushinteger(L, size->h);
+    lua_pushinteger(L, size->offsetX);
+    lua_pushinteger(L, size->offsetY);
+    return 4;
+}
+
+int uiGameImageIndex(lua_State* L)
+{
+    // nox.gameImageIndex(name [, frame]): the video.bag index of the named image's still (frame 0
+    // or none) or its animation's frame (from 0); nil: none.
+    const Impl& impl = implOf(L);
+    size_t n = 0;
+    const char* s = luaL_checklstring(L, 1, &n);
+    const double f = luaL_optnumber(L, 2, 0);
+    std::optional<std::int32_t> index;
+    if (n > 0 && n <= kGameImageMaxName && f >= 0 && f <= 255 && f == std::floor(f)) {
+        index = impl.namedImageIndex(std::string_view(s, n), static_cast<int>(f));
+    }
+    if (index && *index >= 0) {
+        lua_pushinteger(L, *index);
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+int uiPanel(lua_State* L)
+{
+    // nox.panel(x, y, w, h [, fill]): the box filled (black; a colour; false: none), then the
+    // game's window border round it as its bordered windows draw theirs: 20-unit edge pieces 10
+    // units out, 10-unit ones to finish (the last one moved back to end at the corner), the corners.
+    UiWindow& w = drawingWindow(L);
+    constexpr double kFar = 100000;
+    const int x = clampedInt(luaL_checknumber(L, 1), static_cast<int>(-kFar), static_cast<int>(kFar));
+    const int y = clampedInt(luaL_checknumber(L, 2), static_cast<int>(-kFar), static_cast<int>(kFar));
+    const int width = clampedInt(luaL_checknumber(L, 3), 0, 4096);
+    const int height = clampedInt(luaL_checknumber(L, 4), 0, 4096);
+    if (!(lua_isboolean(L, 5) && !lua_toboolean(L, 5))) {
+        UiDraw d;
+        d.kind = UiDraw::Kind::Box;
+        d.x = static_cast<float>(x);
+        d.y = static_cast<float>(y);
+        d.w = static_cast<float>(width);
+        d.h = static_cast<float>(height);
+        d.color = lua_isnoneornil(L, 5) ? UiColor{0, 0, 0, 255} : colourArg(L, 5);
+        w.draws.push_back(std::move(d));
+    }
+    const auto piece = [&](std::string_view name, int px, int py) {
+        pushGameImage(L, w, GamePic{.name = name}, static_cast<float>(px), static_cast<float>(py), 0, 0);
+    };
+    const int top = y - 10;
+    const int bottom = y - 10 + height;
+    const int right = width + x - 10;
+    int i = x + 10;
+    for (; i <= width + x - 30; i += 20) {
+        piece("BorderHorizontal", i, top);
+        piece("BorderHorizontal", i, bottom);
+    }
+    if (right - i > 9) {
+        piece("BorderHorizontalShort", i, top);
+        piece("BorderHorizontalShort", i, bottom);
+        i += 10;
+    }
+    if (i < right) {
+        i = i - 10 + ((right - i + 1) & ~1);
+        piece("BorderHorizontalShort", i, top);
+        piece("BorderHorizontalShort", i, bottom);
+    }
+    const int left = x - 10;
+    int j = y + 10;
+    for (; j <= y - 30 + height; j += 20) {
+        piece("BorderVertical", left, j);
+        piece("BorderVertical", right, j);
+    }
+    if (bottom - j > 9) {
+        piece("BorderVerticalShort", left, j);
+        piece("BorderVerticalShort", right, j);
+        j += 10;
+    }
+    if (j < bottom) {
+        j = j - 10 + ((bottom - j + 1) & ~1);
+        piece("BorderVerticalShort", left, j);
+        piece("BorderVerticalShort", right, j);
+    }
+    piece("BorderCornerUL", left, top);
+    piece("BorderCornerUR", right, top);
+    piece("BorderCornerLL", left, bottom);
+    piece("BorderCornerLR", right, bottom);
+    return 0;
+}
+
+int uiClip(lua_State* L)
+{
+    // nox.clip(x, y, w, h): the window's later draws kept inside that box; nox.clip(): the whole window.
+    UiWindow& w = drawingWindow(L);
+    UiDraw d;
+    d.kind = UiDraw::Kind::Clip;
+    if (lua_isnoneornil(L, 1)) {
+        d.w = -1;
+    } else {
+        constexpr float kFar = 100000;
+        d.x = clampedFloat(luaL_checknumber(L, 1), -kFar, kFar, 0);
+        d.y = clampedFloat(luaL_checknumber(L, 2), -kFar, kFar, 0);
+        d.w = clampedFloat(luaL_checknumber(L, 3), 0, kFar, 0);
+        d.h = clampedFloat(luaL_checknumber(L, 4), 0, kFar, 0);
+    }
+    w.draws.push_back(std::move(d));
+    return 0;
+}
+
+int uiView(lua_State* L)
+{
+    // nox.view(): the whole view in the UI's units, { x, y, w, h } (x, y its top left).
+    const Impl& impl = implOf(L);
+    lua_createtable(L, 0, 4);
+    const std::pair<const char*, int> parts[] = {
+        {"x", -impl.marginX}, {"y", -impl.marginY}, {"w", 640 + 2 * impl.marginX}, {"h", 480 + 2 * impl.marginY}};
+    for (const auto& [key, v] : parts) {
+        lua_pushinteger(L, v);
+        lua_setfield(L, -2, key);
+    }
+    return 1;
+}
+
 /// An API 3 hook that may take what it's told: `push` its arguments (`nargs` of them).
 template <class Push>
 bool callTaking(Impl& impl, const char* hook, int nargs, Push&& push)
@@ -1157,8 +1473,14 @@ void Impl::start()
     static constexpr std::pair<const char*, lua_CFunction> kToolbox5[] = {
         {"hudReserve", uiHudReserve}, {"overMap", uiOverMap},
     };
+    static constexpr std::pair<const char*, lua_CFunction> kToolbox6[] = {
+        {"gameImage", uiGameImage}, {"gameImageSize", uiGameImageSize}, {"gameImageIndex", uiGameImageIndex}, {"panel", uiPanel}, {"clip", uiClip},
+        {"view", uiView},
+    };
     lua_createtable(L, 0,
-                    static_cast<int>(std::size(kToolbox) + std::size(kToolbox2) + std::size(kToolbox3) + std::size(kToolbox4) + std::size(kToolbox5)) + 1);
+                    static_cast<int>(std::size(kToolbox) + std::size(kToolbox2) + std::size(kToolbox3) + std::size(kToolbox4) + std::size(kToolbox5) +
+                                     std::size(kToolbox6)) +
+                        1);
     for (const auto& [name, fn] : kToolbox) {
         lua_pushcfunction(L, fn, name);
         lua_setfield(L, -2, name);
@@ -1183,6 +1505,12 @@ void Impl::start()
     }
     if (uiApi >= 5) {
         for (const auto& [name, fn] : kToolbox5) {
+            lua_pushcfunction(L, fn, name);
+            lua_setfield(L, -2, name);
+        }
+    }
+    if (uiApi >= 6) {
+        for (const auto& [name, fn] : kToolbox6) {
             lua_pushcfunction(L, fn, name);
             lua_setfield(L, -2, name);
         }
@@ -1221,11 +1549,13 @@ void Impl::start()
     hasLabelClick = uiApi >= 5 && has("labelClick");
     hasItemTip = uiApi >= 5 && has("itemTip");
     lua_pop(L, 1);
-    if (begin("start") && !finish("start", 0, 0)) {
-        return;
-    }
+    // Ready told before start runs, so what start sends (nox.send) reaches the server's script: it
+    // lets a UI's sends through only after its ready. (Start failing: its kFailed follows.)
     const std::uint8_t views = hasView ? 1 : 0;
     send(uimsg::kReady, std::span(&views, 1));
+    if (begin("start")) {
+        finish("start", 0, 0);
+    }
 }
 
 void Impl::onAssetMessage(std::uint8_t sub, uimsg::Reader& r)
@@ -1589,6 +1919,24 @@ void Impl::onMessage(std::span<const std::uint8_t> m)
             toBars.push_back(*b);
         }
         break;
+    case uimsg::kTextSet:
+        // (Client level 14; whatever the UI's state: a mode with no UI sends them too.) Set at
+        // once, so a message after it that names the key finds it.
+        if (auto t = uimsg::decodeTextSet(rest)) {
+            textPiece(std::move(*t));
+        }
+        break;
+    case uimsg::kTextClear:
+        if (const auto prefix = uimsg::decodeTextClear(rest); prefix && overlayTable) {
+            overlayTable->clearOverlay(*prefix);
+        }
+        break;
+    case uimsg::kCharacterNote:
+        // (Client level 15; whatever the UI's state.) The latest kept, as sent: the program cleans it.
+        if (auto line = uimsg::decodeCharacterNote(rest)) {
+            characterNote = std::move(*line);
+        }
+        break;
     default: break; // (a sub from a newer server: let go)
     }
 }
@@ -1625,6 +1973,16 @@ LuauVm::Limits ScriptUiClient::defaultLimits()
 void ScriptUiClient::setTextWidth(std::function<int(std::string_view)> measure)
 {
     impl_->textWidth = std::move(measure);
+}
+
+void ScriptUiClient::setStrings(strings::StringTable* table)
+{
+    if (impl_->overlayTable && impl_->overlayTable != table) {
+        impl_->overlayTable->clearOverlay(); // (the last table's texts were this game's)
+    }
+    impl_->overlayTable = table;
+    impl_->textKey.clear();
+    impl_->textSoFar.clear();
 }
 
 void ScriptUiClient::frame(std::uint64_t nowMs)
@@ -1786,6 +2144,22 @@ void ScriptUiClient::setThings(const things::ThingDb* things)
     impl_->thingsOverride = things;
 }
 
+void ScriptUiClient::setGameImageIndex(std::function<std::optional<std::int32_t>(std::string_view name, int frame)> index)
+{
+    impl_->gameImageIndex = std::move(index);
+}
+
+void ScriptUiClient::setGameImageSize(std::function<std::optional<UiGameImageSize>(std::int32_t index)> size)
+{
+    impl_->gameImageSize = std::move(size);
+}
+
+bool ScriptUiClient::coversHud() const noexcept
+{
+    const Impl& impl = *impl_;
+    return impl.vm && std::ranges::any_of(impl.windows, [](const UiWindow& w) { return w.cover; });
+}
+
 std::vector<UiSound> ScriptUiClient::takeSounds()
 {
     return std::exchange(impl_->sounds, {});
@@ -1913,6 +2287,11 @@ std::vector<uimsg::TextLine> ScriptUiClient::takeTextLines()
 std::vector<uimsg::ToBars> ScriptUiClient::takeToBars()
 {
     return std::exchange(impl_->toBars, {});
+}
+
+std::optional<std::string> ScriptUiClient::takeCharacterNote()
+{
+    return std::exchange(impl_->characterNote, std::nullopt);
 }
 
 std::optional<std::uint32_t> gameIconId(std::string_view name)

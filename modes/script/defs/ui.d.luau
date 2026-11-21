@@ -10,7 +10,12 @@ type NoxColour = string | { number }
 -- anchor (UI API 3 and up): "topleft", "top", "topright", "left", "right", "bottomleft", "bottom"
 -- or "bottomright" keeps the window's distance (x, y in the 640 x 480) to that edge or corner of
 -- the whole view on a wider or taller screen; none or "center": centred with the 640 x 480.
-type NoxWindowSpec = { title: string?, x: number?, y: number?, w: number?, h: number?, frame: boolean?, clickThrough: boolean?, hud: boolean?, anchor: string? }
+-- UI API 6: a window may lie anywhere on the whole view (nox.view) and be as big as it, and is kept
+-- to it when the view changes; cover = true hides the game's own HUD pieces (the spell bar, meters,
+-- potion slots, weapon panel, buffs, summon cage, ability strip) while the window is open.
+type NoxWindowSpec = { title: string?, x: number?, y: number?, w: number?, h: number?, frame: boolean?, clickThrough: boolean?, hud: boolean?, anchor: string?, cover: boolean? }
+-- The whole view in the UI's units (UI API 6): x, y its top left (negative past the 640 x 480).
+type NoxView = { x: number, y: number, w: number, h: number }
 type NoxTooltipLine = { any } | string -- { text, colour? }, or a white line's text
 -- keep is UI API 4's: true keeps the label while its object is out of the client's world.
 -- click is UI API 5's: true makes a left click on the label the UI's (ui.labelClick), never the game's.
@@ -18,7 +23,7 @@ type NoxLabelOptions = { show: string?, near: number?, offset: number?, keep: bo
 
 declare nox: {
     --- # Windows
-    --- Opens (or moves) the window `id`, framed and labelled as the server's (UI API 3: or bare, click-through, a HUD piece), in the game's 640 x 480 units.
+    --- Opens (or moves) the window `id`, framed and labelled as the server's (UI API 3: or bare, click-through, a HUD piece), in the game's 640 x 480 units (UI API 6: anywhere on the whole view, as big as it; cover hides the game's HUD pieces).
     window: (id: string, spec: NoxWindowSpec) -> (),
     --- Closes the window `id`.
     closeWindow: (id: string) -> (),
@@ -58,8 +63,21 @@ declare nox: {
     --- # Pictures and sounds (UI API 2)
     --- Draws one of the mod's own pictures (assets\NAME.png) at its size, or scaled to w x h (UI API 2).
     image: (name: string, x: number, y: number, w: number?, h: number?) -> (),
-    --- Draws a thing type's picture from the client's own art (thing.bin's name), centred on (x, y) (UI API 2).
-    thing: (typeName: string, x: number, y: number) -> (),
+    --- Draws a thing type's picture from the client's own art (thing.bin's name), centred on (x, y) (UI API 2); UI API 6: fitted into a w x h box (h none: w), its shape kept.
+    thing: (typeName: string, x: number, y: number, w: number?, h: number?) -> (),
+    --- # The game's pictures and the view (UI API 6)
+    --- Draws any of the game's own pictures at (x, y) moved by its own draw offset as the game draws it (nox.gameImageSize gives it), its size or w x h (the HD pack's where it has one): a named image of thing.bin (its still, or its animation's first frame: UIButtonMed, BorderCornerUL, CreatureCageWolf, AirshipCaptainPic, CursorBitmap...), or with a whole number the video.bag image of that index (any frame of any animation, walls, floors, items: nox.gameImageIndex gives a name's). True: drawn; false: not in the client's art (no such name, an index past video.bag's, a negative or fractional one; draw your own then) (UI API 6).
+    gameImage: (name: string | number, x: number, y: number, w: number?, h: number?) -> boolean,
+    --- The width, height and own draw offset (w, h, ox, oy) of one of the game's pictures (a name or a video.bag index, as nox.gameImage takes them): drawn at its size at (x, y), its top left is at (x + ox, y + oy), so nox.gameImage(p, x - ox, y - oy) puts its top left at (x, y) and nox.gameImage(p, cx - ox - w / 2, cy - oy - h / 2) centres it on (cx, cy); nil: not in the client's art (UI API 6).
+    gameImageSize: (name: string | number) -> (number?, number?, number?, number?),
+    --- The video.bag index of a named image's still (frame 0 or none), or of its animation's frame (from 0), for nox.gameImage to step through an animation; nil: no such name or frame in the client's art (UI API 6).
+    gameImageIndex: (name: string, frame: number?) -> number?,
+    --- Draws a box in the game's own window look: filled (black, a colour, or false for none), the game's window border round it (10 units past its edge) (UI API 6).
+    panel: (x: number, y: number, w: number, h: number, fill: (NoxColour | boolean)?) -> (),
+    --- Keeps the window's later draws this frame inside a box of it; no box: the whole window again (inside ui.draw; UI API 6).
+    clip: (x: number?, y: number?, w: number?, h: number?) -> (),
+    --- The whole view in the UI's units: { x, y, w, h }, x and y negative where a wide or tall screen reaches past the 640 x 480 (UI API 6).
+    view: () -> NoxView,
     --- Plays one of the mod's own sounds (assets\NAME.wav), volume 0-100 (UI API 2).
     sound: (name: string, volume: number?) -> (),
     --- Plays one of the game's own sounds by name, volume 0-100 (UI API 2).

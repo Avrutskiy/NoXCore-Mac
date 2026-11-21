@@ -2,11 +2,14 @@
 // shop and dialog screens, the cinematics, the book), its chat and events, and the messages
 // and saves the server sends.
 #include "app.hpp"
+#include "game_data_swap.hpp"
 #include "new_game.hpp"
 
 #include "noxcore/client/inform_text.hpp"
 #include "noxcore/client/solo_saves.hpp"
 #include "noxcore/io/file.hpp"
+#include "noxcore/server/mode_data.hpp"
+#include "noxcore/strings/l10n.hpp"
 #include "noxcore/things/field_guide.hpp"
 #include "noxcore/util/text.hpp"
 #include "noxcore/version.hpp"
@@ -41,7 +44,7 @@ void sendChat(App& app, const std::string& typed, bool team)
             }
         } else {
             app.editSession->requestEdit(text.size() > 6 ? text.substr(6) : std::string());
-            if (app.console) app.console->print("Asked the host for edit rights.", Yellow);
+            if (app.console) app.console->print(NOX_TR("game.edit_session.asked_rights", "Asked the host for edit rights."), Yellow);
         }
         return;
     }
@@ -494,6 +497,14 @@ void startCinematics(App& app)
                     }
                 },
             });
+            // A mode's own maps (GameHost::Options::modeMaps): the host's client reads the host's
+            // files, never downloads them from itself. (The index is fixed: read from either thread.)
+            if (auto maps = app.host ? app.host->modeMaps() : nullptr) {
+                app.live->client().setHostMaps([maps = std::move(maps)](std::string_view name) -> std::optional<fs::path> {
+                    const nox::server::ModeMaps::Entry* e = maps->find(name);
+                    return e ? std::optional<fs::path>(e->map) : std::nullopt;
+                });
+            }
         }
 
         hooks.requestSave = [&app](const std::string& name) {
@@ -592,6 +603,7 @@ void startCinematics(App& app)
     }
     app.cinematics = std::make_unique<Cinematics>(res, app.gameDir, app.audio.get(), std::move(hooks));
     app.cinematics->setSaveRoot(app.saveRoot);
+    app.cinematics->setCampaignTitle(app.campaignTitle); // (a mod's campaign we host: its saves named; else none)
     if (app.host) {
         // (what the host reads of us between its calls, and our screen messages handled before
         // its queued calls run: local_host.hpp)
@@ -680,6 +692,16 @@ void setUpLiveSession(App& app, const std::string& host)
     }
     setOutfitModifiers(app);
     app.live->client().setModifiers(&app.modifiers);
+    // A mod's own game data (game_data_swap.hpp): read in place of the install's for this game,
+    // before its first map; the host's own client takes the host's files, never downloads them.
+    app.live->client().setGameDataHandler(
+        [&app](std::uint32_t hash, const std::vector<nox::things::DataFileBytes>& files) { return useGameData(app, hash, files); });
+    if (auto data = app.host ? app.host->modeData() : nullptr) {
+        app.live->client().setHostGameData([data](nox::things::DataFile kind, std::uint32_t crc) -> std::optional<std::vector<std::uint8_t>> {
+            const nox::things::DataFileBytes* f = data->find(kind);
+            return f && f->crc == crc ? std::optional<std::vector<std::uint8_t>>(f->bytes) : std::nullopt;
+        });
+    }
     app.inventory = std::make_unique<Inventory>(app.things, *app.art, app.modifiers, app.strings.get(), *app.sprites,
                                                 app.font.get());
     app.inventory->setSound([&app](std::uint32_t id) { uiSound(app, id); });

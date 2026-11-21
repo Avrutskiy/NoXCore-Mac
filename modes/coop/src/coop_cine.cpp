@@ -5,6 +5,8 @@
 #include "noxcore/coop/coop.hpp"
 
 #include "noxcore/net/messages.hpp"
+#include "noxcore/server/dialog.hpp"
+#include "noxcore/server/mode_hooks.hpp"
 #include "noxcore/server/monsters.hpp"
 #include "noxcore/server/objects.hpp"
 #include "noxcore/server/quest.hpp"
@@ -17,6 +19,7 @@
 #include "mode_shared.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -347,10 +350,8 @@ void CoopDirector::mirrorDialog(const server::ServerObject& talker, const std::s
             tell(m, bytes);
         } else if (opening && npc) {
             // A stock player: who talks to whom, once as it opens.
-            std::string name;
-            for (const char16_t c : talker.player->name) {
-                name += c < 0x80 ? static_cast<char>(c) : '?';
-            }
+            const std::string name = strings::toUtf8(talker.player->name);
+
             notice(m, coopmsg::Notice::Info, name + " is talking to " + server::detail::spacedName(npc->typeName) + ".");
         }
     }
@@ -416,13 +417,28 @@ void CoopDirector::showSceneDialog(const server::ServerObject& host, std::size_t
     }
     const std::vector<std::uint8_t> bytes = *opened;
     sceneTalker_ = host.extent;
+    // (A mod's own text for the NPC's name, each player's: World::modeHooks' playerText, as the
+    // host's own window had it. No mode, the host's bytes as they are. The host's title the mode's
+    // text (the map's TellStory gives no speaker): a player the mode has none for, a held-out one or
+    // one of others = "own", the string table's, as its own talk would have it.)
+    server::ModeHooks* const hooks = world().modeHooks;
+    const std::string label = hooks ? server::npcNameLabel(*npc) : std::string();
+    const bool hostsOwn = hooks && hooks->playerText(world(), host, label).has_value();
     for (const Member& m : party_) {
         if (m.host) {
             continue;
         }
         if (const server::ServerObject* u = host_->unitOf(m.peer)) {
             sceneViewers_.emplace(u->extent);
-            tell(m, bytes);
+            std::vector<std::uint8_t> theirs = bytes;
+            if (hooks) {
+                if (std::optional<std::u16string> own = hooks->playerText(world(), *u, label)) {
+                    server::putDialogTitle(theirs, server::fitDialogTitle(std::move(*own)));
+                } else if (hostsOwn) {
+                    server::putDialogTitle(theirs, world().text(label));
+                }
+            }
+            tell(m, std::move(theirs));
         }
     }
 }

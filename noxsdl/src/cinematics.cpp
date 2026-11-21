@@ -3,6 +3,8 @@
 // save / load menu with its message box, and the client's own .plr sections.
 #include "cinematics.hpp"
 
+#include "campaign_line.hpp"
+
 #include "console.hpp"
 #include "menu_rules.hpp"
 
@@ -1482,12 +1484,16 @@ void Cinematics::openLoadMenu()
     // "Quit" and the label "Load Game" while a briefing's up, else "Cancel" and "Save/Load Game";
     // paused.
     if (!loadMenu_) {
-        loadMenu_ = gui_.load(gameDir_ / "window" / "selchar.wnd", [this](gui::Window&, int message, gui::Window& from) {
+        // (noxcpp: a mod's campaign named between the heading and the lists: campaign_line.hpp.)
+        nox::gui::WindowDef def = nox::gui::loadWindowFile(gameDir_ / "window" / "selchar.wnd");
+        addCampaignLine(def, campaignTitle_, 108, 92, 400, 14);
+        loadMenu_ = gui_.load(def, [this](gui::Window&, int message, gui::Window& from) {
             return message == gui::Clicked && onLoadMenu(from);
         });
         if (!loadMenu_) {
             return;
         }
+        drawCampaignLine(loadMenu_, campaignTitle_);
         if (gui::Window* lists = loadMenu_->find(kLists)) {
             lists->proc = loadMenu_->proc;
         }
@@ -1569,11 +1575,13 @@ void Cinematics::fillLoadMenu()
         if (slot.name == "AUTOSAVE") {
             line += " " + gui_.text("AutoSaveLabel", "GUISave.c");
         } else {
-            line += " - " + text(std::string(nox::client::solo_saves::stageLabel(slot.info.questStage, cls)));
+            // (noxcpp: a mod's campaign's at the map it was saved on: campaign_text.hpp.)
+            line += " - " + campaignSavePlace(text(std::string(nox::client::solo_saves::stageLabel(slot.info.questStage, cls))), slot.info.mapName,
+                                              campaignTitle_);
         }
         lists->lines.push_back({" ", c});
         dates->lines.push_back({nox::client::solo_saves::whenText(slot.info.time), c});
-        names->lines.push_back({line, c});
+        names->lines.push_back({campaignSaveLine(std::move(line), campaignTitle_), c}); // (noxcpp: a mod's campaign's title after it)
     }
     const LoadMenuButtons buttons = loadMenuButtons(saved);
     enable(loadMenu_, kCancel, buttons.cancel);

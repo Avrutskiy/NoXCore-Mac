@@ -65,7 +65,8 @@ configure_file("${mac}/Info.plist.in" "${output}/Info.plist" @ONLY)
 add_custom_target(noxsdl_bundle
     COMMAND "${CMAKE_COMMAND}" "-DEXECUTABLE=$<TARGET_FILE:noxsdl>"
         "-DBUNDLE=${PROJECT_BINARY_DIR}/NoX Core.app" "-DSOURCE=${PROJECT_SOURCE_DIR}"
-        "-DPLIST=${output}/Info.plist" -P "${mac}/bundle.cmake"
+        "-DPLIST=${output}/Info.plist" "-DMODS_LIBRARY=${NOX_MODS_LIBRARY_DIR}"
+        -P "${mac}/bundle.cmake"
     DEPENDS noxsdl VERBATIM)
 option(NOX_BUILD_METAL_TESTS "Build the Mac GPU smoke test" OFF)
 if(NOX_BUILD_METAL_TESTS)
