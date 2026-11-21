@@ -71,10 +71,15 @@ Launch prepareLaunch(std::vector<std::string> arguments, const LaunchPaths& path
         if (arguments[i] == "--user-dir") {
             arguments.erase(arguments.begin() + i, arguments.begin() + i + 2);
         } else if (arguments[i] == "--save-dir") {
-            auto path = fs::absolute(arguments.at(i + 1));
-            // Preserve symlink/.. traversal. Only remove trailing separators.
-            if (!path.has_filename() && path.has_relative_path()) path = path.parent_path();
-            arguments[i + 1] = path.string();
+            auto& value = arguments.at(i + 1);
+            if (!value.empty()) {
+                auto path = fs::absolute(value);
+                // Keep symlink/.. traversal intact when trimming equivalent directory spellings.
+                while (path.has_relative_path() && (!path.has_filename() || path.filename() == ".")) {
+                    path = path.parent_path();
+                }
+                value = path.string();
+            }
             i += 2;
         } else {
             ++i;

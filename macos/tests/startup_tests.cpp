@@ -60,11 +60,11 @@ int main()
         require(option(launch.arguments, "--mods-dir") == "custom-mods" && !fs::exists(custom / "Mods"), "explicit mods directory skips import");
         require(!fs::exists(custom / "Save/Hero.plr"), "independent saves must not be migrated");
         require(!fs::exists(custom / ".saves-import-complete"), "independent saves must not mark migration complete");
-        for (const auto& spelling : {"relative/Save", "relative/Save/", "custom/", "/"}) {
+        for (const auto& spelling : {"relative/Save", "relative/Save/", "relative/Save/./", "custom/", "/"}) {
             launch = noxsdl::macos::prepareLaunch({"noxcore", "--game-dir", assets.string(), "--save-dir", spelling}, paths);
             auto value = fs::path(*option(launch.arguments, "--save-dir"));
             require(value.is_absolute() && (value == value.root_path() || value.has_filename()), "save path normalized");
-            require(value / "hero" == fs::absolute(spelling) / "hero", "save path preserves location");
+            require((value / "hero").lexically_normal() == (fs::absolute(spelling) / "hero").lexically_normal(), "save path preserves location");
         }
         fs::create_directories(paths.executable);
         const auto bundled = paths.executable / "GameData";
