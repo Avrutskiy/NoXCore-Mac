@@ -75,6 +75,9 @@ std::string listedName(std::uint8_t playerClass);
 /// A player's key from game to game: its account and name ("account/name"; no account: the
 /// name), as the Undead Tide keys its runners.
 std::string runnerKey(const server::HostedPlayer& p);
+/// The same as a build before whole names kept it (each UTF-16 unit past ASCII a '?'): a campaign
+/// saved then knows its runners so (CoopDirector::joined takes it while there's no whole one).
+std::string olderRunnerKey(const server::HostedPlayer& p);
 
 class CoopDirector;
 
@@ -159,6 +162,10 @@ public:
         /// party of one) and its shares a player. Normal is the scale above, the solo game's own
         /// numbers when alone.
         int difficulty = 1;
+        /// (A mod's campaign, CoopCampaign's) its mode id and title, told to NoX Core players as
+        /// they join (Hello's campaign). Empty: the game's own campaign, Hello as it always was.
+        std::string campaignId;
+        std::string campaignTitle;
     };
     /// A difficulty's scale: the monsters' health and the damage players take with one player,
     /// and what each player past the first adds.

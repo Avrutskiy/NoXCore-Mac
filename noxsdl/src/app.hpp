@@ -78,6 +78,7 @@
 #include "view3d.hpp"
 #include "weather.hpp"
 
+#include "noxcore/client/character_notes.hpp"
 #include "noxcore/client/edit_session_client.hpp"
 #include "noxcore/client/spell_bars.hpp"
 #include "noxcore/client/state_draw.hpp"
@@ -86,6 +87,7 @@
 #include "noxcore/map/map_file.hpp"
 #include "noxcore/player/player_file.hpp"
 #include "noxcore/server/play_from_here.hpp"
+#include "noxcore/strings/string_table.hpp"
 #include "noxcore/things/game_data.hpp"
 #include "noxcore/things/modifier.hpp"
 #include "noxcore/things/thing_db.hpp"
@@ -182,6 +184,16 @@ struct App {
     nox::things::ThingDb things;
     nox::things::ModifierDb modifiers; ///< item colours (empty if modifier.bin is missing)
     nox::things::GameData gameData; ///< gamedata.bin's tables (read at start-up, as thing.bin)
+    /// (game_data_swap.hpp) While a game reads a mod's own game data: the install's three tables,
+    /// kept here (the three above are the mod's, in their place), and the set's hash; null / 0:
+    /// the three above are the install's, as at start-up.
+    struct InstallTables {
+        nox::things::ThingDb things;
+        nox::things::ModifierDb modifiers;
+        nox::things::GameData gameData;
+    };
+    std::unique_ptr<InstallTables> installTables;
+    std::uint32_t gameDataHash = 0;
     SpellLimits spellLimits; ///< live: spells refused while our last one is out (the HUD marks them)
     std::unique_ptr<nox::video::VideoBag> bag;
     std::unique_ptr<SpriteCache> sprites;
@@ -263,7 +275,11 @@ struct App {
     /// SoloScreensStart): the solo saves' root, kept while saveRoot is the mode's (back at the
     /// game's end: endSoloScreensHost). Empty: not hosting one.
     std::filesystem::path modeKeptRoot;
+    /// The mod's campaign it hosts (the Campaign choice: mode.json's "campaign" title), while it's
+    /// hosted (beginSoloScreensHost to endSoloScreensHost); empty: none, or the game's own.
+    std::string campaignTitle;
     std::string hostSoloScreensTest; ///< (tests: --host-coop, that mode of --class's hosted: its id)
+    std::string hostCoopCampaignTest; ///< (tests: --host-coop-campaign ID, mod ID's campaign so hosted)
     bool sessionInGame = false;
     bool sessionHosting = false;
     bool sessionNoticed = false;
@@ -288,7 +304,7 @@ struct App {
     bool privateTestRun = false;    ///< --private-test: this process is one (no router port asked for)
     std::filesystem::path exePath;               ///< argv[0] (a private test runs another of us)
     bool hostLoopback = false;      ///< --host-loopback: a game hosted here binds the loopback alone (local tests)
-    std::uint16_t menuHostPort = 0; ///< --menu-host-port: a campaign mode or an edit session hosted from the menus on it (0: the game's)
+    std::uint16_t menuHostPort = 0; ///< --menu-host-port: every game the menus host on it (host_listing.hpp's menuHostSocket; 0: the game's)
     /// The session's pending edits in our game view: "Pending changes" Shaded / As final / Hidden
     /// (noxsdl pending, noxcore.cfg's PendingChanges; --pending-view for one run), and what the
     /// view was last given (updatePending).
@@ -508,7 +524,19 @@ struct App {
     /// Live: a co-op guest's campaign character ("<name> (Co-op).plr", set by coop_ui.cpp): its bars
     /// are saved there when the game is left, when the campaign's save has made it (saveBars).
     std::filesystem::path guestBarsFile;
-    bool barsExpanded = false;         ///< all five sets showing
+    /// (noxcpp) This game's place in the note beside the character we joined with (character_play.hpp:
+    /// a mode's or the co-op campaign's, with the mode's line); none: nothing noted (a stock or arena
+    /// game, a character the network character screen doesn't list). The .plr it's noted beside, a
+    /// co-op file noted with it, a line held back to be written, and when one last was.
+    std::optional<nox::client::character_notes::Place> characterPlace;
+    std::filesystem::path characterPlaceFile;
+    std::filesystem::path characterCoopFile;
+    bool characterNoteHeld = false;
+    std::uint64_t characterNoteWrittenMs = 0;
+    /// (noxcpp) The character screen's switch, each screen's ("host", "join", "local"): its characters
+    /// for the game's mode alone (noxcore.cfg's CharactersModeOnly*; Menus::setCharacterListModeOnly).
+    std::map<std::string, bool, std::less<>> charactersModeOnly;
+    bool barsExpanded = false;       ///< all five sets showing
     int barsClass = -1;                 ///< the class the bars were loaded for (ownClass)
     bool barsMulticlass = false;        ///< loaded for noxcpp's multiclass (a warrior's abilities tagged)
     bool barsInverted = false;          ///< InvertSpellTarget held
@@ -680,6 +708,13 @@ struct App {
     std::unique_ptr<Font> largeFont;
     /// Options' Original Style Fonts (noxcore.cfg's OriginalFonts): the Nox-style fonts, else Caudex.
     bool originalFonts = true;
+    /// noxcore.cfg's CsfText (OptionsWindow::Extras::kCsfText*), and what nox.csf's letters said
+    /// at load (auto's answer): applyTextCodepage makes the result the program's, once at start.
+    int csfText = OptionsWindow::Extras::kCsfTextAuto;
+    int csfShift = -1; ///< CsfText = cp1251:N's N (-1: the guess's)
+    nox::strings::CodepageGuess csfGuess;
+    /// noxcore.cfg's Language (empty: chosen: applyLanguage), taken at start.
+    std::string language;
     bool namePlates = true; ///< N toggles
     std::uint32_t joinTeam = 0; ///< --team: asked for once we're in the game
     bool autoSpawn = false;     ///< --spawn: leave observer mode once in the game (for tests)
@@ -786,6 +821,9 @@ inline bool playing(const nox::client::HeadlessClient& client)
 }
 
 // app.cpp
+/// Whether the game's own HUD pieces are drawn and take the mouse this frame (hud_shown.hpp's
+/// hudShownTo: not while we observe, nor while a mode's window covers them); F11 aside.
+bool gameHudShown(const App& app);
 /// Whether intoGameArea changes a window point (letterboxed, or the pixel density over 1).
 bool mapsPointer(const App& app);
 void intoGameArea(const App& app, float& x, float& y);
@@ -825,6 +863,8 @@ void preloadMap(App& app, const std::string& name);
 void preloadSession(App& app);
 void applyExtras(App& app, const OptionsWindow::Extras& e);
 void applyFonts(App& app);
+void applyTextCodepage(App& app);
+void applyLanguage(App& app);
 void openOptions(App& app);
 int trackData(App& app);
 void setTrackData(App& app, int mask);

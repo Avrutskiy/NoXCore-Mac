@@ -25,6 +25,7 @@
 #include "editor/play_test.hpp"
 
 #include "noxcore/mapedit/document.hpp"
+#include "noxcore/mapedit/script_doc.hpp"
 #include "noxcore/mapedit/sidecar.hpp"
 #include "noxcore/script/arg_values.hpp"
 #include "noxcore/script/compiler.hpp"
@@ -94,6 +95,9 @@ private:
 
     void syncFromDocument();
     void ensureSource();
+    /// sourceNotes_ from what reading a saved source (the sidecar's, or one kept in the map's
+    /// string 0) through the call-order migration did; Problems shown when one is a warning.
+    void noteMigration(const std::optional<nox::script::CallOrderMigration>& migration);
     void compileNow();
     bool compileIntoMap();
     void saveAndReload();
@@ -217,6 +221,7 @@ private:
     std::uint64_t typedMs_ = 0;
     bool decompileTried_ = false;
     std::vector<std::string> decompileNotes_;
+    std::vector<nox::mapedit::SourceNote> sourceNotes_; ///< what reading the sidecar's source did (its call-order migration)
     // The last compile.
     nox::script::CompileResult last_;
     std::optional<nox::script::DebugInfo> good_; ///< the last good compile's names (navigation)
@@ -227,6 +232,8 @@ private:
     std::optional<std::string> readOnly_;
     std::optional<std::uint64_t> readOnlyRev_; ///< the history revision it was worked out at
     bool readOnlyAllow_ = false;
+    /// The reason is the script's memory tricks (me::documentMemoryTricks): no setting changes it.
+    bool readOnlyTricks_ = false;
     std::uint64_t compileDueMs_ = 0;
     // Find.
     bool findOpen_ = false, findFocus_ = false, findCase_ = false;

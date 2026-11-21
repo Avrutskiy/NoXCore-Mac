@@ -4,6 +4,7 @@
 // says when a co-op game refuses a character of another class. Its hosting goes through the solo
 // screens (SoloScreensStart: the class screen picks the campaign, its saves under Save\Coop).
 #include "app.hpp"
+#include "character_play.hpp"
 #include "mode_ui.hpp"
 
 #include "noxcore/client/solo_saves.hpp"
@@ -13,6 +14,7 @@
 #include "noxcore/lobby/extended.hpp"
 #include "noxcore/net/server_transport.hpp"
 #include "noxcore/player/player_file.hpp"
+#include "noxcore/strings/l10n.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -46,16 +48,36 @@ void applyCine(nox::server::HostClient& h, const nox::coop::coopmsg::Cine& c)
     }
 }
 
+/// Where our co-op character for the campaign the host named is kept (nox::coop::guestCharacterFolder:
+/// a mod's campaign's in that mod's players' saves); empty: beside the character we joined with, as
+/// for the game's own campaign.
+std::filesystem::path coopCharacterFolder(const nox::coop::CoopClient* coop)
+{
+    if (!coop || !coop->hello() || coop->hello()->campaignId.empty()) {
+        return {};
+    }
+    std::filesystem::path dir = nox::coop::guestCharacterFolder(nox::modes::registry(), coop->hello()->campaignId);
+    if (dir.empty()) {
+        SDL_Log("coop: the campaign %s isn't one of our mods (or its saves can't be written): its co-op character kept beside ours",
+                coop->hello()->campaignId.c_str());
+    }
+    return dir;
+}
+
 /// Our campaign character as the host's save left it, kept beside the one we joined with as
 /// "<name> (Co-op).plr" (never over it): the server's sections as a quest's SAVEDATA is kept, then
-/// our own sections as a network character's, so the list of network characters shows it.
-void keepCoopCharacter(App& app, std::span<const std::uint8_t> data)
+/// our own sections as a network character's, so the list of network characters shows it. A mod's
+/// campaign's goes in `folder` (coopCharacterFolder) instead.
+void keepCoopCharacter(App& app, std::span<const std::uint8_t> data, const std::filesystem::path& folder)
 {
     if (app.characterFile.empty() || !app.cinematics || !app.live) {
         SDL_Log("coop: no character file to keep the campaign's character beside");
         return;
     }
-    const std::filesystem::path plr = nox::coop::campaignCharacterFile(app.characterFile);
+    const std::filesystem::path plr = nox::coop::campaignCharacterFile(app.characterFile, folder);
+    if (plr == app.characterFile && !folder.empty()) {
+        return; // (never over the character we joined with)
+    }
     namespace saves = nox::client::solo_saves;
     if (saves::keepSaveData(app.saveRoot / "Save", plr, data, true) != saves::KeptSave::Written) {
         SDL_Log("coop: unable to write %s", reinterpret_cast<const char*>(plr.u8string().c_str()));
@@ -81,20 +103,20 @@ void keepCoopCharacter(App& app, std::span<const std::uint8_t> data)
 /// character's are (the class screen's), so no spell it doesn't know is on them. A "(Co-op).plr"
 /// keeps its own bars. From then on the bars are saved into the "(Co-op).plr" as the game is left
 /// (saveBars), as well as at each of the host's saves (keepCoopCharacter).
-void barsForGuest(App& app, bool kept)
+void barsForGuest(App& app, bool kept, const std::filesystem::path& folder)
 {
     const auto cls = static_cast<nox::player::CharacterClass>(ownClass(app));
-    if (auto bars = nox::coop::guestBars(app.characterFile, cls, kept)) {
+    if (auto bars = nox::coop::guestBars(app.characterFile, cls, kept, folder)) {
         const bool empty = *bars == nox::client::SpellBars{};
         app.bars = std::move(*bars);
         if (empty) {
             SDL_Log("coop: a character no solo game saved: its spell bars empty, as a new solo character's");
         } else {
             SDL_Log("coop: the campaign kept us: the spell bars of %s",
-                    reinterpret_cast<const char*>(nox::coop::campaignCharacterFile(app.characterFile).u8string().c_str()));
+                    reinterpret_cast<const char*>(nox::coop::campaignCharacterFile(app.characterFile, folder).u8string().c_str()));
         }
     }
-    app.guestBarsFile = nox::coop::campaignCharacterFile(app.characterFile);
+    app.guestBarsFile = nox::coop::campaignCharacterFile(app.characterFile, folder);
 }
 
 /// A guest's known abilities on its bars, those not on them yet (SpellBars::addKnownAbilities):
@@ -151,6 +173,9 @@ public:
         reading_ = {};
         dialogSeen_ = 0;
         barsLooked_ = false;
+        campaignTold_ = false;
+        worldSinceMs_ = 0;
+        characterFolder_.clear();
         app_.guestBarsFile.clear(); // (saveBars ran before the game's let go)
         app_.partyDots = false;
         app_.partyNames = false;
@@ -202,7 +227,13 @@ public:
         if (coop_->guest()) {
             if (!barsLooked_) {
                 barsLooked_ = true; // (a guest's spell bars looked at once it's in)
-                barsForGuest(app, coop_->hello() && coop_->hello()->characterKept);
+                characterFolder_ = coopCharacterFolder(coop_); // (once a game: Hello's campaign)
+                barsForGuest(app, coop_->hello() && coop_->hello()->characterKept, characterFolder_);
+                // (noxcpp) The campaign noted beside the character we joined with, and its co-op file
+                // when that's one the character screen lists (character_play.hpp).
+                if (coop_->hello()) {
+                    characterPlayedCoop(app, coop_->hello()->campaignId, coop_->hello()->campaignTitle);
+                }
                 abilitiesSeen_ = app.quietAbilityAwards;
                 abilitiesForGuest(app);
             } else if (app.quietAbilityAwards != abilitiesSeen_ && !app.flight) {
@@ -210,7 +241,13 @@ public:
                 abilitiesForGuest(app);
             }
             if (const auto kept = coop_->takeCharacter()) {
-                keepCoopCharacter(app, *kept);
+                keepCoopCharacter(app, *kept, characterFolder_);
+                if (coop_->hello()) {
+                    // (noxcpp) The co-op file noted too, when the character screen lists it (the game's own
+                    // campaign's, beside ours).
+                    characterPlayedCoop(app, coop_->hello()->campaignId, coop_->hello()->campaignTitle,
+                                        nox::coop::campaignCharacterFile(app.characterFile, characterFolder_));
+                }
             }
         }
         for (const auto& [kind, text] : coop_->takeNotices()) {
@@ -220,13 +257,36 @@ public:
         if (!app.cinematics) {
             return;
         }
+        // A mod's campaign (Hello's): its name once, when the world has been up for 3 s with no
+        // chapter screen over it (one that comes at the map's start read first), to the host and
+        // the guests alike. The game's own: nothing.
+        if (!campaignTold_ && coop_->hello() && !coop_->hello()->campaignTitle.empty()) {
+            const std::uint64_t now = SDL_GetTicks();
+            if (!inWorld(app) || app.cinematics->briefingShown()) {
+                worldSinceMs_ = 0;
+            } else if (worldSinceMs_ == 0) {
+                worldSinceMs_ = now;
+            }
+        }
+        if (!campaignTold_ && worldSinceMs_ != 0 && SDL_GetTicks() - worldSinceMs_ >= 3000) {
+            campaignTold_ = true;
+            const std::string line =
+                nox::l10n::format(NOX_TR("menus.solo.campaign_line", "Campaign: {campaign}"), {{"campaign", coop_->hello()->campaignTitle}});
+            app.centred.print(line, gameFrame(app), SDL_Color{240, 180, 42, 255}); // (the menus' gold)
+            SDL_Log("coop: %s", line.c_str());
+            if (app.console) {
+                app.console->print(line, Yellow);
+            }
+        }
         // Who's still reading: told when it changes, while any is.
         const auto state = coop_->readyState();
         if (state != reading_.toldState) {
             reading_.toldState = state;
             if (state.first > 0 && !app.cinematics->briefingShown()) {
-                centredMessage(app, "Waiting for " + std::to_string(state.first) + " of " + std::to_string(state.second) + " to finish the chapter screen" +
-                                        (coop_->guest() ? std::string(".") : std::string(" (type ?skip to go on)")));
+                centredMessage(app, nox::l10n::format(coop_->guest() ? NOX_TR("modes.coop.chapter.waiting", "Waiting for {n} of {of} to finish the chapter screen.")
+                                                                     : NOX_TR("modes.coop.chapter.waiting_host",
+                                                                              "Waiting for {n} of {of} to finish the chapter screen (type ?skip to go on)"),
+                                                      {{"n", state.first}, {"of", state.second}}));
             }
         }
         // Another player's talk (the host's, or a guest's): the NPC's line in the console as each comes.
@@ -273,10 +333,14 @@ public:
         const std::uint8_t refused = game->game.bannedClasses & 7u;
         for (std::uint8_t c = 0; c < 3; ++c) {
             if (refused == (7u & ~(1u << c))) {
-                return "This co-op campaign is for " + std::string(nox::coop::className(c)) + " characters only.";
+                // (nox::coop::className's, as shown)
+                const std::string& cls = c == 0   ? NOX_TR("modes.coop.class.warrior", "Warrior")
+                                         : c == 1 ? NOX_TR("modes.coop.class.wizard", "Wizard")
+                                                  : NOX_TR("modes.coop.class.conjurer", "Conjurer");
+                return nox::l10n::format(NOX_TR("modes.coop.join.class_only", "This co-op campaign is for {class} characters only."), {{"class", cls}});
             }
         }
-        return std::string("This co-op campaign doesn't take characters of your class.");
+        return NOX_TR("modes.coop.join.class_refused", "This co-op campaign doesn't take characters of your class.");
     }
 
 private:
@@ -336,6 +400,9 @@ private:
     Reading reading_;
     std::uint32_t dialogSeen_ = 0;
     bool barsLooked_ = false;
+    bool campaignTold_ = false; ///< (a mod's campaign named once a game)
+    std::uint64_t worldSinceMs_ = 0; ///< (SDL_GetTicks since the world's been up, no chapter screen; 0: not)
+    std::filesystem::path characterFolder_; ///< (coopCharacterFolder, as the guest was greeted)
     std::uint32_t abilitiesSeen_ = 0; ///< (App::quietAbilityAwards as the bars last took them)
     std::uint32_t creaturesSeen_ = 0; ///< (CoopClient::partyCreaturesVersion copied to App::partyCreatures)
     std::string seenMap_;                       ///< the map our view's walls and obelisks below are of

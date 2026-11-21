@@ -78,6 +78,16 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
             (a == "--fake-xwis-games" ? opts.fakeXwisGames : opts.fakeWolConnecting) = true;
             continue;
         }
+        if (a == "--host-coop-campaign") {
+            // Tests: --host-coop with mod ID's campaign (its row's Campaign choice), from its first map.
+            hosting().solo = true;
+            app.hostSoloScreensTest = "coop";
+            app.hostCoopCampaignTest = next();
+            if (opts.hostSettings->map == "Estate") {
+                opts.hostSettings->map.clear();
+            }
+            continue;
+        }
         if (a == "--host") {
             hosting().map = next();
         } else if (a == "--host-port") {
@@ -177,8 +187,9 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
             // (Local tests) the game hosted here (--host, --host-edit) binds 127.0.0.1 alone.
             app.hostLoopback = true;
         } else if (a == "--menu-host-port") {
-            // (Local tests, recordings) a game hosted from the menus (Host, Host Custom > a campaign
-            // mode, the Map Editor's session) on this port instead of the game's own.
+            // (Local tests, recordings) a game hosted from the menus (Host, Host Quest, Host Custom's
+            // modes and campaign modes, Game Modes' modes and its Quest, the Map Editor's session) on
+            // this port instead of the game's own.
             app.menuHostPort = static_cast<std::uint16_t>(std::atoi(next()));
         } else if (a == "--session-editor") {
             // (Tests) a joining noxsdl client opens the session's editor as soon as it's greeted.

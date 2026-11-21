@@ -10,6 +10,9 @@
 //          [version 4: then u16 its client level (kClientLevel); the hash 0 when none]
 //          [version 5: then u64 a host's client key realm, 32 bytes: the client's secret for it
 //           (ClientSecret: only to a host whose reply named that realm)]
+//          [version 7: then u8 n, n bytes: the client's UI language ("en", "ru", "ko": lower-case
+//           letters, kMaxLanguageBytes at most), after version 5's tail (its realm 0 and 32 zeros
+//           when it has no secret); version 6 is the reply's alone]
 //   reply  00 00 F0 "NXSV" u16 version, u32 token,         (noxcpp server -> browser)
 //          u8 max substeps a frame (1-4: 30-120 Hz), u32 feature bits
 //          [version 3: then u64 the host's added object types' hash, u8 n, n bytes: the ids
@@ -69,6 +72,11 @@ inline constexpr std::uint32_t NoxCoreOnly = 32;  ///< stock clients are turned 
 /// never worn): noxsdl's cursor shows the pickup hand over them, not Caution. A client before it
 /// ignores the bit and shows Caution as before; a stock client never asks.
 inline constexpr std::uint32_t PickupAnyClass = 64;
+/// The host's text convention isn't Latin-1 (strings::wireText: a Russian fan translation's
+/// install), so it recodes its stock clients' names and lines for a client of kUnicodeTextLevel
+/// (unicodeTextWith). A host without it passes them on as they came, as GAME.EXE does: a client
+/// there keeps its own install's convention, as a stock client of that install would.
+inline constexpr std::uint32_t RecodesText = 128;
 } // namespace ServerFeature
 
 /// What a client says it takes (a version 2 query's): a server sends what needs a feature only to
@@ -89,6 +97,10 @@ inline constexpr std::uint16_t kExtendedRealmVersion = 5;
 inline constexpr std::uint16_t kExtendedModeNameVersion = 6;
 /// The most of a mode's name a reply carries (bytes of UTF-8).
 inline constexpr std::size_t kModeNameBytes = 64;
+/// The version whose tail carries the client's language (the query only).
+inline constexpr std::uint16_t kExtendedLanguageVersion = 7;
+/// The most of a language's code a query carries ("en", "pt-br").
+inline constexpr std::size_t kMaxLanguageBytes = 16;
 
 /// A NoX Core client's secret for one host realm (a mode's "clientKeys"): random, made by the client
 /// the first time it meets the realm and kept in its own folder; the host keeps only a key made
@@ -146,7 +158,46 @@ struct ClientSecret {
 ///      spell or ability its player knows put in the bars' first empty slot where no slot holds it,
 ///      with no book, sound or sparks), sent only to a client of level 10 or above that named
 ///      ModeUi (ui_proto.hpp's kToBarsLevel); any other is sent nothing (nox.putOnBars says false)
-inline constexpr std::uint16_t kClientLevel = 10;
+///  11  UI API 6 (mode.json's "uiApi": 6: nox.gameImage and nox.gameImageSize (any of the game's
+///      pictures, by name or video.bag index), nox.gameImageIndex, nox.panel, nox.clip, nox.view,
+///      nox.thing's size, windows the size of the whole view and cover), a UI of it sent
+///      only to a client of level 11 or above that named ModeUi and ModeUi2 (ui_proto.hpp's
+///      kUiApi6Level); any other gets the views as text
+///  12  the game's text as real Unicode (kUnicodeTextLevel): a host of level 12 or above sends a
+///      client of level 12 or above every name and line as it is (UTF-16), and reads that client's
+///      names and lines so, whatever either's install keeps for the original game (a Russian fan
+///      translation's Windows-1251 bytes: strings::LegacyText); any other client gets and is read
+///      in the host's convention, as a stock client. The client takes it so only from a host
+///      that says it recodes (ServerFeature::RecodesText, unicodeTextWith); a Latin-1 host's
+///      convention is the identity, so it reads either the same
+///  13  script calls in source order (kSourceOrderCallsLevel): the script compiler binds a call of
+///      the map script's own function's first argument to its first parameter (a release below
+///      bound it to the last), and an edit session carries the script as plain text, so an edit
+///      session's host (setUpEditSession) lets in no NoX Core client below 13; every other game
+///      as before. (A client of 13 can tell an older host by the reply's clientLevel.)
+///  14  the client's UI language in its query (version 7's tail: the server's
+///      ServerTransport::clientLanguage, a script mode's nox.player(peer).language), and a script
+///      mode's text overlay (nox.setText: MSG_NOXCPP_MODEUI's kTextSet and kTextClear, texts the
+///      client's string lookups find before nox.csf's, each in that client's language), sent only to
+///      a client of level 14 or above that named ModeUi (ui_proto.hpp's kTextsLevel); any other is
+///      sent nothing and keeps its own nox.csf's texts
+///  15  a script mode's line about a player's character (nox.characterNote: MSG_NOXCPP_MODEUI's
+///      kCharacterNote, kept by the client beside the character it joined with for its character
+///      screens), sent only to a client of level 15 or above that named ModeUi (ui_proto.hpp's
+///      kCharacterNoteLevel); any other is sent nothing (nox.characterNote says false)
+///  16  a mod's own game data files (kGameDataLevel: MSG_NOXCPP_GAMEDATA, net/game_data_proto.hpp):
+///      a game whose mod ships thing.bin, modifier.bin or gamedata.bin, or an override of one (server/mode_data.hpp), sends
+///      them before the first map, and the client reads them for that game alone; such a game
+///      lets in no NoX Core client below 16 (the too-old notice) and no stock client
+inline constexpr std::uint16_t kClientLevel = 16;
+/// The client level that reads a mod's own game data files (kClientLevel's list, 16): a game
+/// that has them lets in none below it.
+inline constexpr std::uint16_t kGameDataLevel = 16;
+/// The client level whose script calls bind in source order: an edit session's lowest (kClientLevel's
+/// list, 13).
+inline constexpr std::uint16_t kSourceOrderCallsLevel = 13;
+/// The client level whose game text goes as real Unicode both ways (kClientLevel's list, 12).
+inline constexpr std::uint16_t kUnicodeTextLevel = 12;
 /// The client level whose map downloads take the fast send (kClientLevel's list, 4).
 inline constexpr std::uint16_t kFastMapSendLevel = 4;
 /// What a client below a server's lowest level is told (the browser's prompt too), word for word.
@@ -168,11 +219,29 @@ struct ExtendedServer {
     bool operator==(const ExtendedServer&) const = default;
 };
 
+/// Whether a client's names and lines go to and come from `host` as real Unicode (kUnicodeTextLevel):
+/// a host of that level that recodes its stock clients' text (ServerFeature::RecodesText). At a
+/// Latin-1 host they go in the client's own convention, so a Russian install's stock players there
+/// read it and it reads them, as before; the host takes either the same way (its convention is the
+/// identity). A Latin-1 install's client sends the same either way.
+inline bool unicodeTextWith(const ExtendedServer& host) noexcept
+{
+    return host.clientLevel >= kUnicodeTextLevel && (host.features & ServerFeature::RecodesText) != 0;
+}
+
 /// The query; with client features, version 2's (none: version 1's, as before); with an added
 /// object types' hash, version 3's; with a client level above 0, version 4's; with a secret,
-/// version 5's.
+/// version 5's; with a language (kept to kMaxLanguageBytes; one that isn't a language's code,
+/// languageCode's: none), version 7's.
 std::vector<std::uint8_t> encodeExtendedQuery(std::uint32_t token, std::uint32_t clientFeatures = 0, std::uint64_t typesHash = 0,
-                                              std::uint16_t clientLevel = 0, const std::optional<ClientSecret>& secret = std::nullopt);
+                                              std::uint16_t clientLevel = 0, const std::optional<ClientSecret>& secret = std::nullopt,
+                                              std::string_view language = {});
+/// `text` as a language's code: 1 to kMaxLanguageBytes of a-z, 0-9 and '-' (A-Z made small, '_'
+/// a '-'), a letter first; empty when it isn't one.
+std::string languageCode(std::string_view text);
+/// The language a query names (version 7's, languageCode's; "" in an older one, or one whose
+/// bytes aren't a code), if `datagram` is one: nullopt too for a version 7 one too short for it.
+std::optional<std::string> extendedQueryLanguage(std::span<const std::uint8_t> datagram);
 /// The secret a query carries (version 5's), if `datagram` is one with it (nullopt: none, too
 /// short, or realm 0).
 std::optional<ClientSecret> extendedQuerySecret(std::span<const std::uint8_t> datagram);

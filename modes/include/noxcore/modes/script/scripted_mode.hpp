@@ -79,6 +79,8 @@ struct lua_State;
 
 namespace nox::server {
 struct ModeHooks;
+class ModeData;
+class ModeMaps;
 }
 
 namespace nox::modes::script {
@@ -91,6 +93,13 @@ struct ModPackage {
     /// A built-in mode's files (by path, as read takes it), in place of the folder's: never
     /// reloaded by their time.
     std::function<std::optional<std::string>(std::string_view relPath)> source;
+    /// The maps it ships (its folder's maps\<Name>\<Name>.map), indexed as the mods folder was read
+    /// (loadMods); null: none. configure hands them to its games alone (GameHost::Options::modeMaps).
+    std::shared_ptr<const server::ModeMaps> maps;
+    /// The game data files it ships (its folder's data\: server/mode_data.hpp), read and checked
+    /// as the mods folder was read (loadMods); null: none. configure hands them to its games
+    /// (GameHost::Options::modeData); its host reads the games' tables from them.
+    std::shared_ptr<const server::ModeData> data;
     /// One of its files by its path in the folder ('/' separated, nothing outside it), less a
     /// leading UTF-8 mark; none: not there, or bigger than 1 MB.
     std::optional<std::string> read(std::string_view relPath) const;

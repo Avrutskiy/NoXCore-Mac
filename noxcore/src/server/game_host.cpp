@@ -8,16 +8,21 @@
 #include "noxcore/io/byte_reader.hpp"
 #include "noxcore/io/byte_writer.hpp"
 #include "noxcore/io/file.hpp"
+#include "noxcore/lobby/extended.hpp"
 #include "noxcore/map/map_file.hpp"
 #include "noxcore/map/sections.hpp"
 #include "noxcore/net/framing.hpp"
+#include "noxcore/net/game_data_proto.hpp"
 #include "noxcore/net/player_input.hpp"
 #include "noxcore/player/player_file.hpp"
+#include "noxcore/script/opcodes.hpp"
+#include "noxcore/script/script_file.hpp"
 #include "noxcore/server/collide.hpp"
 #include "noxcore/server/dialog.hpp"
 #include "noxcore/server/enchant.hpp"
 #include "noxcore/server/host_links.hpp"
 #include "noxcore/modes/registry.hpp"
+#include "noxcore/server/mode_data.hpp"
 #include "noxcore/server/mode_hooks.hpp"
 #include "noxcore/server/modes.hpp"
 #include "noxcore/server/monsters.hpp"
@@ -27,6 +32,7 @@
 #include "noxcore/server/player_save.hpp"
 #include "noxcore/server/profile.hpp"
 #include "noxcore/server/quest.hpp"
+#include "noxcore/server/script_host.hpp"
 #include "noxcore/server/solo_save.hpp"
 #include "noxcore/server/teleport.hpp"
 #include "noxcore/server/trade.hpp"
@@ -67,19 +73,6 @@ void copyText(std::array<std::uint8_t, N>& to, std::string_view text)
     std::memcpy(to.data(), text.data(), std::min(text.size(), N - 1));
 }
 
-// A UTF-16LE name, up to its NUL, as ASCII (other letters as '?').
-std::string nameOf(std::span<const std::uint8_t> wide)
-{
-    std::string out;
-    for (std::size_t i = 0; i + 1 < wide.size(); i += 2) {
-        const char16_t c = static_cast<char16_t>(wide[i] | wide[i + 1] << 8);
-        if (c == 0) {
-            break;
-        }
-        out += c < 0x80 ? static_cast<char>(c) : '?';
-    }
-    return out;
-}
 
 // UTF-16LE bytes up to the first NUL.
 using util::utf16Until;
@@ -114,6 +107,27 @@ std::vector<std::uint8_t> heightReport(const ServerObject& o)
             static_cast<std::uint8_t>(static_cast<int>(below ? -o.z : o.z))};
 }
 
+/// The builtin that makes `file`'s script one NoX Core refuses (script::memoryTrickBuiltin), if
+/// any. (A script that doesn't parse: none here; the load says so as ever.)
+std::optional<std::uint32_t> memoryTricksOf(const map::MapFile& file)
+{
+    if (!file.find(map::ScriptObject::kName)) {
+        return std::nullopt;
+    }
+    try {
+        return script::memoryTrickBuiltin(script::ScriptFile::parse(map::decodeSection<map::ScriptObject>(file).code));
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+/// The log's line for a refused map.
+void logRefusedMap(const std::string& map, std::uint32_t id, std::string_view what)
+{
+    scriptLog("script: map " + map + ": refused (" + std::string(what) + "): its script calls builtin " + std::to_string(id) +
+              ", past the game's 211 and outside NoX Core's own range: memory tricks of the original game that NoX Core does not run");
+}
+
 /// A game's numbers come from the install's gamedata.bin alone (nothing is built in), so a host
 /// made without it is the calling program's mistake: noxsdl and the dedicated servers load
 /// the file at start-up, as they load thing.bin.
@@ -121,6 +135,17 @@ GameHost::Options requireGameData(GameHost::Options o)
 {
     if (!o.gameData) {
         throw std::invalid_argument("GameHost: no gamedata.bin loaded");
+    }
+    // (noxcpp) A mode's own data files a client reads (Options::modeData): only NoX Core clients
+    // that read them play, whatever the mode said. An older one is refused at its join (the
+    // too-old notice), a stock one held out with the NoX Core-only notice: either would read the
+    // install's thing.bin where this game reads another.
+    if (o.modeData && std::ranges::any_of(o.modeData->files(), [](const things::DataFileBytes& f) { return things::clientReadsDataFile(f.kind); })) {
+        o.minClientLevel = std::max(o.minClientLevel, lobby::kGameDataLevel);
+        if (!o.stockRefusal) {
+            o.stockRefusal = GameHost::Options::StockRefusal{
+                "This game is a NoX Core mod with its own game data. Get the free NoX Core client from noxhub.net and join again."};
+        }
     }
     return o;
 }
@@ -135,6 +160,13 @@ bool withinReach(const ServerObject& unit, const ServerObject& thing)
     return dx * dx + dy * dy <= kReach * kReach;
 }
 } // namespace
+
+MapRefused::MapRefused(std::string mapName, std::uint32_t id)
+    : std::runtime_error(script::memoryTricksNotice(mapName))
+    , map(std::move(mapName))
+    , builtin(id)
+{
+}
 
 // Builds the server and loads the first map, then sets up the settings records, the rules, the
 // map's copy for downloads and the lobby's checks.
@@ -206,6 +238,12 @@ GameHost::GameHost(const things::ThingDb& things, const std::filesystem::path& m
         });
     }
     const auto file = map::loadMapFile(mapPath);
+    if (const auto trick = memoryTricksOf(file)) {
+        // (noxcpp's) A script made for the original game's memory tricks: no game on it (the
+        // caller shows what() to whoever hosted it).
+        logRefusedMap(mapPath.stem().string(), *trick, "the game's first map");
+        throw MapRefused(mapPath.stem().string(), *trick);
+    }
     mapPath_ = mapPath;
     mapFile_ = mapPath.filename().string();
     mapCrc_ = file.crc;
@@ -214,7 +252,7 @@ GameHost::GameHost(const things::ThingDb& things, const std::filesystem::path& m
         // (noxcpp: a saved game's copy hosted with room for guests: they're told the map's own file)
         const std::string stem = mapPath.stem().string();
         std::error_code ec;
-        if (const std::filesystem::path own = resolveNoCase(mapsDir() / stem / (stem + ".map")); std::filesystem::exists(own, ec)) {
+        if (const std::filesystem::path own = resolveNoCase(findMap(stem)); std::filesystem::exists(own, ec)) {
             try {
                 pristineCrc_ = map::loadMapFile(own).crc;
             } catch (const std::exception&) {
@@ -266,8 +304,10 @@ GameHost::GameHost(const things::ThingDb& things, const std::filesystem::path& m
     transport_.setExtended(extendedServer());
     // The object types the content packs add: only games with the same ones are let in. (The
     // process's: its thing.bin loads once, with the installed packs, and every host shares it.)
+    // (A mod's own thing.bin is read without them, on every side: none to match then.)
     const content::NewThingTypes types = content::newThingTypes();
-    if (types.hash != 0) {
+    if (types.hash != 0 &&
+        !(options_.modeData && (options_.modeData->find(things::DataFile::Things) || options_.modeData->find(things::DataFile::ThingsPatch)))) {
         std::string packs;
         for (const auto& id : types.packs) {
             packs += (packs.empty() ? "" : ", ") + id;
@@ -320,7 +360,7 @@ void GameHost::refreshServerInfo()
     info.videoFlags = access_.limitResolution ? 0x80 : 0;
     info.pingMin = static_cast<std::uint16_t>(access_.minPing ? *access_.minPing : 0xFFFF); // (a u16 field, as the transport's)
     info.pingMax = static_cast<std::uint16_t>(access_.maxPing ? *access_.maxPing : 0xFFFF);
-    const auto name = options_.serverName.substr(0, 15);
+    const auto name = strings::utf8ToWire8(strings::fitWire8(options_.serverName, 15)); // (the original's 8-bit text)
     info.serverName.assign(name.begin(), name.end());
     info.serverName.push_back(0);
     transport_.setServerInfo(info);
@@ -333,7 +373,7 @@ lobby::GameListing GameHost::listing()
     // Access settings (closed, private, the classes refused, the ping limits).
     World& world = server_.world();
     lobby::GameListing g;
-    g.name = options_.serverName.substr(0, 15);
+    g.name = strings::fitWire8(options_.serverName, 15); // (UTF-8; makeWolRecord writes its 8-bit form)
     g.map = std::filesystem::path(world.mapName).stem().string();
     g.players = static_cast<int>(players_.size());
     g.maxPlayers = options_.maxPlayers;
@@ -457,6 +497,9 @@ void GameHost::tick(std::uint32_t nowMs)
     if (!refused_.empty()) {
         putOutRefused(); // (noxcpp: Options::stockRefusal's holds that are up)
     }
+    if (!dataSenders_.empty()) {
+        dataSendFrame(); // (noxcpp: a mod's game data files to the clients that asked)
+    }
     // (game flags 1 and 8: no connects; but while our end of match vote holds it)
     transport_.setMatchOver((server_.world().gameFlags & GameFlag::GameOver) != 0 && !endVoteHolds());
     refreshServerInfo(); // (the game list's view of it, as it stands)
@@ -540,7 +583,8 @@ void GameHost::syncClasses()
         const auto bytes = bytesOf(told);
         for (const auto& [other, q] : players_) {
             if (other == peer || q.joined) {
-                transport_.sendReliable(other, bytes);
+                const auto text = textFor(other, bytes); // (noxcpp: its name as the client takes it)
+                transport_.sendReliable(other, text ? std::span<const std::uint8_t>(*text) : std::span<const std::uint8_t>(bytes));
             }
         }
     }
@@ -627,7 +671,11 @@ void GameHost::afterFrame()
             for (const auto& b : broadcasts) {
                 if (b.reliable && (b.to == p.extent || (b.to == 0 && p.joined))) {
                     auto other = forPeer ? options_.forPeer(*this, peer, b.bytes) : std::nullopt;
-                    p.pending.push_back({other ? std::move(*other) : b.bytes, false});
+                    std::vector<std::uint8_t> bytes = other ? std::move(*other) : b.bytes;
+                    if (auto text = textFor(peer, bytes)) {
+                        bytes = std::move(*text); // (noxcpp: its text as the client takes it)
+                    }
+                    p.pending.push_back({std::move(bytes), false});
                 }
             }
         }
@@ -679,7 +727,8 @@ void GameHost::afterFrame()
             // seconds before going on.
             for (const auto& b : broadcasts) {
                 if (!b.reliable && (b.to == 0 || b.to == p.extent)) {
-                    transport_.sendUnreliable(peer, b.bytes);
+                    const auto text = textFor(peer, b.bytes); // (noxcpp: its text as the client takes it)
+                    transport_.sendUnreliable(peer, text ? std::span<const std::uint8_t>(*text) : std::span<const std::uint8_t>(b.bytes));
                 }
             }
             transport_.sendUnreliable(peer, std::vector<std::uint8_t>{static_cast<std::uint8_t>(net::Op::Timestamp),
@@ -691,18 +740,21 @@ void GameHost::afterFrame()
             continue;
         }
         const auto send = [&](const World::Broadcast& b) {
+            // (noxcpp: its text as the client takes it, textFor)
+            const auto text = textFor(peer, b.bytes);
+            const std::span<const std::uint8_t> bytes = text ? std::span<const std::uint8_t>(*text) : std::span<const std::uint8_t>(b.bytes);
             if (b.reliable) {
                 bool queued = false;
-                if (auto other = forPeer ? options_.forPeer(*this, peer, b.bytes) : std::nullopt) {
+                if (auto other = forPeer ? options_.forPeer(*this, peer, bytes) : std::nullopt) {
                     queued = transport_.sendReliable(peer, std::move(*other));
                 } else {
-                    queued = transport_.sendReliable(peer, b.bytes);
+                    queued = transport_.sendReliable(peer, bytes);
                 }
                 if (b.to == p.extent) {
                     secondaryTellQueued(p, b.bytes, queued); // (noxcpp: a read's tell's packet)
                 }
             } else {
-                transport_.sendUnreliable(peer, b.bytes);
+                transport_.sendUnreliable(peer, bytes);
             }
         };
         releasePending(p); // (released at its CLIENT_READY already: what's left, none)
@@ -1606,9 +1658,12 @@ void GameHost::onPayload(std::uint8_t peer, std::span<const std::uint8_t> bytes)
         case net::Op::NoxcppModeUi: // (a script mode's UI, from a noxsdl player that asked for it)
             onNoxcppModeMessage(peer, m);
             break;
+        case net::Op::NoxcppGameData: // (noxcpp's, from a noxsdl player: the mod's game data files it lacks)
+            onNoxcppGameData(peer, m);
+            break;
         case net::Op::ServerCmd: // (0xBB) {cmd, u16 its code, u8 chars, UTF-16 text}
             if (m.size() >= 5) {
-                onServerCmd(peer, m[1], utf16Until(m.subspan(5)));
+                onServerCmd(peer, m[1], strings::fromWire(utf16Until(m.subspan(5)), peerText(peer))); // (noxcpp: as Unicode)
             }
             break;
         case net::Op::SysopPw: // (0xBC) the password, UTF-16
@@ -1988,6 +2043,78 @@ void GameHost::onNoxcppModeMessage(std::uint8_t peer, std::span<const std::uint8
     }
 }
 
+void GameHost::sendDataSet(std::uint8_t peer)
+{
+    // (Only the files a client reads: monster.bin and soundset.bin stay the server's.)
+    net::gamedata::Set set;
+    set.hash = options_.modeData->hash();
+    for (const things::DataFileBytes& f : options_.modeData->files()) {
+        if (things::clientReadsDataFile(f.kind)) {
+            const std::uint32_t merged =
+                things::isDataPatch(f.kind) ? options_.modeDataMerged[static_cast<std::size_t>(things::dataTableOf(f.kind))] : 0u;
+            set.files.push_back({f.kind, static_cast<std::uint32_t>(f.bytes.size()), f.crc, merged, f.digest});
+        }
+    }
+    // (The joining player isn't among players_ yet: straight to the transport, as its USE_MAP.)
+    if (!set.files.empty() && transport_.identified(peer)) {
+        transport_.sendReliable(peer, net::gamedata::encodeSet(set));
+    }
+}
+
+void GameHost::onNoxcppGameData(std::uint8_t peer, std::span<const std::uint8_t> m)
+{
+    // A client's kWant: the files of the set it has no copy of, sent in order. Anything else (a
+    // game without the data, a kind the set hasn't, a second ask while one goes) is let go.
+    const auto framed = net::gamedata::unframe(m);
+    if (!framed || framed->sub != net::gamedata::kWant || !options_.modeData || !transport_.identified(peer) ||
+        dataSenders_.contains(peer)) {
+        return;
+    }
+    const auto kinds = net::gamedata::decodeWant(framed->rest);
+    if (!kinds || kinds->empty()) {
+        return;
+    }
+    DataSender s;
+    for (const things::DataFile k : *kinds) {
+        if (!things::clientReadsDataFile(k) || !options_.modeData->find(k)) {
+            return;
+        }
+        s.kinds.push_back(static_cast<std::uint8_t>(k));
+    }
+    dataSenders_.emplace(peer, std::move(s));
+    // The player watches its download, as a map request's does (watchForDownload: back in play as
+    // after one, a mode's say at its ready). A client with every file at hand never asks.
+    watchForDownload(peer);
+}
+
+void GameHost::dataSendFrame()
+{
+    // Each asker's next chunks while its queue has room, the game's own reliable messages first
+    // (reliableBulkRoom keeps their share free), at most 16 a call.
+    for (auto it = dataSenders_.begin(); it != dataSenders_.end();) {
+        const std::uint8_t peer = it->first;
+        DataSender& s = it->second;
+        for (int sent = 0; sent < 16 && !s.kinds.empty() && queuedReliable(peer) < 24 && reliableBulkRoom(peer) > 0; ++sent) {
+            const things::DataFileBytes* f = options_.modeData ? options_.modeData->find(static_cast<things::DataFile>(s.kinds.front())) : nullptr;
+            if (!f) {
+                s.kinds.clear();
+                break;
+            }
+            const std::size_t n = std::min<std::size_t>(net::gamedata::kChunkBytes, f->bytes.size() - s.offset);
+            if (!sendToIdentified(peer, net::gamedata::encodeChunk(f->kind, s.offset,
+                                                                  std::span<const std::uint8_t>(f->bytes).subspan(s.offset, n)))) {
+                break; // (refused: tried again next time, from the same place)
+            }
+            s.offset += static_cast<std::uint32_t>(n);
+            if (s.offset >= f->bytes.size()) {
+                s.kinds.erase(s.kinds.begin());
+                s.offset = 0;
+            }
+        }
+        it = s.kinds.empty() ? dataSenders_.erase(it) : std::next(it);
+    }
+}
+
 // CLIENT_READY (SrvNet_OnClientReady): the player in; what waited for it, the map's walls, doors and
 // vote as it stands now sent it.
 void GameHost::onClientReady(std::uint8_t peer)
@@ -2078,11 +2205,26 @@ void GameHost::onClientReady(std::uint8_t peer)
                 sendImportant(peer, World::textMessage(strings::fromUtf8(options_.stockRefusal->notice), 0));
             }
         }
+        players_[peer].watchingForDownload = false;
         return;
     }
     if (options_.onClientReady) {
         options_.onClientReady(*this, peer); // (noxcpp: a mode told, e.g. to send its multiclass word)
     }
+    // (noxcpp) A download's watching is over with this ready (the mode had its say on it).
+    if (const auto it = players_.find(peer); it != players_.end()) {
+        it->second.watchingForDownload = false;
+    }
+}
+
+bool GameHost::watchingForDownload(std::uint8_t peer)
+{
+    const auto it = players_.find(peer);
+    if (it == players_.end() || !it->second.watchingForDownload) {
+        return false;
+    }
+    const ServerObject* unit = server_.world().byExtent(it->second.extent);
+    return unit && unit->player && unit->player->observing && !unit->player->heldOut;
 }
 
 // INCOMING_CLIENT (SrvNet_OnIncomingClient): the player into the game, told of everyone and everything
@@ -2289,6 +2431,7 @@ void GameHost::onTextMessage(std::uint8_t peer, std::span<const std::uint8_t> se
         while (!text.empty() && text.front() == u' ') {
             text.erase(text.begin());
         }
+        strings::fromWireInPlace(text, peerText(peer)); // (noxcpp: read as Unicode)
         // (noxcpp, a mode's: an answer of its own taken, not relayed.)
         if (options_.onChat && !text.empty() && options_.onChat(*this, peer, text)) {
             return;
@@ -2301,8 +2444,20 @@ void GameHost::onTextMessage(std::uint8_t peer, std::span<const std::uint8_t> se
         }
     }
     World& world = server_.world();
+    // (noxcpp: on a host whose convention isn't Latin-1, each gets the line as it takes text: a
+    // stock client's line as it came to the other stock clients, in Unicode to NoX Core ones
+    // (textFromStock); a NoX Core one's in Unicode to them, recoded for stock ones (textFor).
+    // Elsewhere everyone gets it as it came.)
+    const bool fromStock = !unicodePeer(peer);
+    const auto unicodeLine = fromStock ? World::textFromStock(m, strings::wireText()) : std::nullopt;
     const auto relay = [&](std::uint8_t to) {
-        transport_.sendUnreliable(to, m);
+        std::optional<std::vector<std::uint8_t>> recoded;
+        if (unicodePeer(to)) {
+            recoded = unicodeLine;
+        } else if (!fromStock) {
+            recoded = textFor(to, m);
+        }
+        transport_.sendUnreliable(to, recoded ? std::span<const std::uint8_t>(*recoded) : m);
         transport_.flushUnreliable(to);
     };
     const ServerObject* sender = world.byExtent(players_[peer].extent);
@@ -2366,7 +2521,9 @@ void GameHost::join(std::uint8_t peer, std::span<const std::uint8_t> bytes)
     }
     // Kicked by a vote: not back for its 15 minutes; banned from the console: not back (the ban
     // list, by name).
-    if (const auto ban = bans_.find(utf16Until(accept.playerName)); ban != bans_.end()) {
+    // (noxcpp: its name as Unicode, read as its client sends it: GameHost::peerText)
+    const std::u16string joinName = strings::fromWire(utf16Until(accept.playerName), peerText(peer));
+    if (const auto ban = bans_.find(joinName); ban != bans_.end()) {
         if (ban->second == 0xFFFFFFFFu || static_cast<std::int32_t>(ban->second - nowMs_) > 0) {
             transport_.close(peer);
             return;
@@ -2401,7 +2558,19 @@ void GameHost::join(std::uint8_t peer, std::span<const std::uint8_t> bytes)
     if (forced) {
         p.info[0x42] = *forced;
     }
-    p.name = nameOf(accept.playerName);
+    // (noxcpp: its name kept as Unicode, in the info too, which goes to each client as it takes
+    // text: textFor; in UTF-8 for the console, the logs and the ban list)
+    p.wideName = joinName;
+    p.name = strings::toUtf8(joinName);
+    // (Only a name the reading changed is written again: else the info goes on byte for byte as
+    // the client sent it, what follows its end too, as GAME.EXE passes it on.)
+    if (joinName != utf16Until(accept.playerName)) {
+        for (std::size_t i = 0; i < 25; ++i) {
+            const char16_t c = i < joinName.size() && i < 24 ? joinName[i] : u'\0';
+            p.info[2 * i] = static_cast<std::uint8_t>(c);
+            p.info[2 * i + 1] = static_cast<std::uint8_t>(c >> 8);
+        }
+    }
     p.slot = options_.solo ? std::uint8_t{0x1F} : static_cast<std::uint8_t>((peer - 1) & 31); // (a solo game's player the host's)
     if (options_.solo && options_.soloGuests > 0 && !awaitingHost_) {
         // (noxcpp: a solo game's guest, Options::soloGuests: the lowest slot no player has, below
@@ -2441,7 +2610,7 @@ void GameHost::join(std::uint8_t peer, std::span<const std::uint8_t> bytes)
     unit.player->viewHalfWidth = p.viewHalfWidth;
     unit.player->viewHalfHeight = p.viewHalfHeight;
     unit.player->index = p.slot;
-    unit.player->name = utf16Until(accept.playerName);
+    unit.player->name = joinName; // (noxcpp: as Unicode)
     unit.player->info = p.info; // (the join's PlayerInfo, the .plr's Attrib)
     unit.player->ownClass = ownClass;
     // noxcpp: a mode's multiclass, a noxsdl player's alone (its client asked the extended
@@ -2519,8 +2688,14 @@ void GameHost::join(std::uint8_t peer, std::span<const std::uint8_t> bytes)
     newPlayer.playerInfo = p.info;
     newPlayer.accountName = accept.account;
     const auto announce = bytesOf(newPlayer);
-    append(first, announce);
+    {
+        const auto text = textFor(peer, announce); // (noxcpp: its name as its client takes it)
+        append(first, text ? *text : announce);
+    }
     transport_.sendReliable(peer, first);
+    if (options_.modeData) {
+        sendDataSet(peer); // (noxcpp: a mod's own game data, which its client reads before the map)
+    }
     transport_.sendReliable(peer, useMapBytes(frame, soloGuest(p)));
 
     // The others hear of it (it hears of them at its INCOMING_CLIENT: SrvNet_SendAllPlayersToNewPlayer):
@@ -2779,6 +2954,7 @@ void GameHost::leave(std::uint8_t peer)
     // Then, by its index, every object owed to its slot afresh, known only of the always-sent
     // kinds (the next player in the slot starts clean). (noxcpp: its map send let go, OB-163.)
     mapSendPeerGone(peer);
+    dataSenders_.erase(peer); // (noxcpp: its game data's send let go)
     forgetObjects(it->second.slot);
     if (ServerObject* unit = server_.world().byExtent(it->second.extent)) {
         // MSG_OUTGOING_CLIENT {its code} to the others (the first of the two notices: 0xAE here,
@@ -3016,11 +3192,11 @@ void GameHost::onVote(std::uint8_t peer, std::span<const std::uint8_t> m)
     if (sub > 3 || m.size() < 0x34) {  // (+2: the name, 25 UTF-16 letters; 0x34 = 2 + 50)
         return;
     }
-    const std::u16string name = utf16Until(m.subspan(2, 50));
+    const std::u16string name = strings::fromWire(utf16Until(m.subspan(2, 50)), peerText(peer)); // (noxcpp: as Unicode)
     // The player of that name (_wcscmp), not itself.
     HostedPlayer* target = nullptr;
     for (auto& [other, p] : players_) {
-        if (utf16Until(p.accept.playerName) == name) {
+        if (p.wideName == name) {
             target = &p;
             break;
         }
@@ -3131,7 +3307,7 @@ void GameHost::updateVotes()
             questSaveAndKick(f, *unit);
             for (auto& [peer, p] : players_) {
                 if (p.extent == v.target) {
-                    bans_[utf16Until(p.accept.playerName)] = nowMs_ + 15u * 60000u; // (banned for 15 minutes)
+                    bans_[p.wideName] = nowMs_ + 15u * 60000u; // (banned for 15 minutes)
                     syncAccess();
                 }
             }
@@ -3160,7 +3336,7 @@ void GameHost::updateVotes()
                 }
                 for (auto& [peer, p] : players_) {
                     if (p.extent == target) {
-                        bans_[utf16Until(p.accept.playerName)] = nowMs_ + 15u * 60000u; // (banned for 15 minutes)
+                        bans_[p.wideName] = nowMs_ + 15u * 60000u; // (banned for 15 minutes)
                         syncAccess();
                         const std::uint8_t kicked = peer;
                         disconnect(kicked, 4); // (Plr_DisconnectByIndex, reason 4)
@@ -3227,13 +3403,16 @@ std::uint32_t GameHost::mapModesOf(const std::string& name)
     if (const auto it = mapModes_.find(name); it != mapModes_.end()) {
         return it->second;
     }
-    const fs::path mapsDir = !options_.mapsDir.empty() ? options_.mapsDir : mapPath_.parent_path().parent_path();
-    const fs::path path = mapsDir / name / (name + ".map");
+    const fs::path path = findMap(name);
     std::uint32_t modes = 0;
     try {
         if (fs::exists(resolveNoCase(path))) { // (in any case: maps/Fortress/fortress.map)
             const auto file = map::loadMapFile(path);
             modes = file.find(map::MapInfo::kName) ? mapToGameFlags(map::decodeSection<map::MapInfo>(file).gameFlags) : 0;
+            if (const auto trick = modes != 0 ? memoryTricksOf(file) : std::nullopt) {
+                logRefusedMap(name, *trick, "left out of the map cycle");
+                modes = 0; // (noxcpp's: never cycled to)
+            }
         }
     } catch (const std::exception&) {
         modes = 0;
@@ -3255,6 +3434,24 @@ GameHost::ServerSettings GameHost::serverSettings()
     return s;
 }
 
+namespace {
+
+/// (noxcpp) A mode's own maps (Options::modeMaps) among the maps folder's `names`, each once (a
+/// name the folder has too is the mode's map in its game: findMap).
+void addModeMapNames(std::vector<std::string>& names, const ModeMaps* own)
+{
+    if (!own) {
+        return;
+    }
+    for (const ModeMaps::Entry& e : own->entries()) {
+        if (std::ranges::none_of(names, [&](const std::string& n) { return util::equalsNoCase(n, e.name); })) {
+            names.push_back(e.name);
+        }
+    }
+}
+
+} // namespace
+
 std::vector<GameHost::MapChoice> GameHost::mapChoices()
 {
     namespace fs = std::filesystem;
@@ -3267,11 +3464,12 @@ std::vector<GameHost::MapChoice> GameHost::mapChoices()
             names.push_back(e.path().filename().string());
         }
     }
+    addModeMapNames(names, options_.modeMaps.get());
     std::ranges::sort(names);
     std::vector<MapChoice> out;
     for (const auto& name : names) {
         if (const auto it = mapChoices_.find(name); it != mapChoices_.end()) {
-            if (it->second.modes != 0) {
+            if (it->second.modes != 0 && !it->second.memoryTricks) {
                 out.push_back(it->second);
             }
             continue;
@@ -3279,7 +3477,7 @@ std::vector<GameHost::MapChoice> GameHost::mapChoices()
         MapChoice c;
         c.name = name;
         try {
-            const fs::path path = mapsDir / name / (name + ".map");
+            const fs::path path = findMap(name);
             if (fs::exists(resolveNoCase(path))) {
                 const auto file = map::loadMapFile(path);
                 if (file.find(map::MapInfo::kName)) {
@@ -3289,6 +3487,10 @@ std::vector<GameHost::MapChoice> GameHost::mapChoices()
                         c.modes = mapToGameFlags(info.gameFlags);
                         c.minPlayers = info.minPlayers;
                         c.maxPlayers = info.maxPlayers;
+                        // (noxcpp's) Marked from this one read of it, never listed or voted on.
+                        if ((c.memoryTricks = memoryTricksOf(file))) {
+                            logRefusedMap(name, *c.memoryTricks, "left out of the map list and the map vote");
+                        }
                     }
                 }
             }
@@ -3296,7 +3498,7 @@ std::vector<GameHost::MapChoice> GameHost::mapChoices()
             c.modes = 0;
         }
         mapChoices_[name] = c;
-        if (c.modes != 0) {
+        if (c.modes != 0 && !c.memoryTricks) {
             out.push_back(c);
         }
     }
@@ -3350,7 +3552,7 @@ bool sameIgnoringCase(const S& a, const S& b)
 void GameHost::setServerName(const std::string& name)
 {
     // gameSetServername: 15 letters at most; the same but for case, kept as it was.
-    const std::string n = name.substr(0, 15);
+    const std::string n = strings::fitWire8(name, 15); // (15 bytes as the wire carries them)
     if (!n.empty() && !sameIgnoringCase(n, options_.serverName)) {
         options_.serverName = n;
         settingsChanged_ = true;
@@ -3583,6 +3785,50 @@ std::filesystem::path GameHost::mapsDir() const
     return !options_.mapsDir.empty() ? options_.mapsDir : mapPath_.parent_path().parent_path();
 }
 
+std::filesystem::path GameHost::findMap(std::string_view name) const
+{
+    if (options_.modeMaps) {
+        if (const ModeMaps::Entry* own = options_.modeMaps->find(name)) {
+            return own->map;
+        }
+    }
+    const std::string n(name);
+    return mapsDir() / n / (n + ".map");
+}
+
+std::filesystem::path GameHost::findMap(const Options& o, std::string_view name)
+{
+    if (o.modeMaps) {
+        if (const ModeMaps::Entry* own = o.modeMaps->find(name)) {
+            return own->map;
+        }
+    }
+    const std::string n(name);
+    return o.mapsDir / n / (n + ".map");
+}
+
+RuleFolders GameHost::ruleFoldersOf(const std::string& name) const
+{
+    RuleFolders at = ruleFolders(mapsDir(), name); // (every map's but a mode's own: as always)
+    if (options_.modeMaps) {
+        if (const ModeMaps::Entry* own = options_.modeMaps->find(name)) {
+            // A mode's own map: its saved rules with the mod's saved data, the ones it ships after.
+            // (The index's name: a plain folder name, checked as the mod was read.)
+            at.own = own->name;
+            at.shipped = own->map.parent_path();
+            if (!options_.modeRulesDir.empty()) {
+                at.saved = options_.modeRulesDir / own->name;
+                at.make = true;
+            } else {
+                at.saved = at.shipped; // (nowhere to keep any: read only)
+                at.shipped.clear();
+                at.readOnly = true;
+            }
+        }
+    }
+    return at;
+}
+
 void GameHost::loadRules()
 {
     // The map's load, after server_loadMapFile (a network game's, not a chat game's):
@@ -3591,7 +3837,7 @@ void GameHost::loadRules()
     if (!(world.gameFlags & GameFlag::Network) || (world.gameFlags & GameFlag::Chat)) {
         rules_ = RuleSet{};
     } else {
-        rules_ = readRules(mapsDir(), mapPath_.stem().string(), std::nullopt, 3, world.gameFlags, things_);
+        rules_ = readRules(ruleFoldersOf(mapPath_.stem().string()), std::nullopt, 3, world.gameFlags, things_);
     }
     applyRules();
 }
@@ -3616,7 +3862,7 @@ void GameHost::applyRules()
 
 RuleSet GameHost::rulesFor(const std::string& map, std::uint32_t mode, const std::optional<std::string>& file)
 {
-    return readRules(mapsDir(), map, file, 7, mode, things_, true, server_.world().wolGame);
+    return readRules(ruleFoldersOf(map), file, 7, mode, things_, true, server_.world().wolGame);
 }
 
 std::optional<RuleSet> GameHost::internetRules()
@@ -3629,19 +3875,23 @@ std::optional<RuleSet> GameHost::internetRules()
 
 std::vector<std::string> GameHost::ruleSetsOf(const std::string& map)
 {
-    return ruleSets(mapsDir(), map);
+    return ruleSets(ruleFoldersOf(map));
 }
 
 bool GameHost::saveRuleSet(const std::string& map, const std::string& name, const RuleSet& rules, std::uint32_t mode)
 {
-    return writeRules(mapsDir(), map, name + ".rul", rules, mode, things_, server_.world().wolGame);
+    return writeRules(ruleFoldersOf(map), name + ".rul", rules, mode, things_, server_.world().wolGame);
 }
 
 void GameHost::deleteRuleSet(const std::string& map, const std::string& name)
 {
-    // maps\<map>\<name>.rul gone.
+    // maps\<map>\<name>.rul gone (a mode's own map's: the one saved for it; one it ships stays).
+    const RuleFolders at = ruleFoldersOf(map);
+    if (at.readOnly) {
+        return;
+    }
     std::error_code ec;
-    std::filesystem::remove(mapsDir() / map.substr(0, 8) / (name + ".rul"), ec);
+    std::filesystem::remove(at.saved / (name + ".rul"), ec);
 }
 
 GameHost::TeamsView GameHost::teamsView()
@@ -3815,8 +4065,9 @@ void GameHost::applyServerSettings(const ServerSettings& s)
         // The rules chosen into the map's user.rul for the mode, its other lines kept
         // (read, then written).
         RuleSet out = *s.rules;
-        out.other = readRules(mapsDir(), map, std::nullopt, 3, s.mode ? s.mode : world.gameFlags, things_).other;
-        writeRules(mapsDir(), map, "user.rul", out, s.mode ? s.mode : world.gameFlags, things_, world.wolGame);
+        const RuleFolders at = ruleFoldersOf(map); // (a mode's own map's with its mod's saved data)
+        out.other = readRules(at, std::nullopt, 3, s.mode ? s.mode : world.gameFlags, things_).other;
+        writeRules(at, "user.rul", out, s.mode ? s.mode : world.gameFlags, things_, world.wolGame);
     }
     if (!sameIgnoringCase(map, mapPath_.stem().string())) {
         nextMap(map);
@@ -3853,6 +4104,21 @@ void GameHost::scanMaps()
         name = name.substr(0, 8);
         if (mapModesOf(name) != 0) { // (checkMapFile)
             names.push_back(std::move(name));
+        }
+    }
+    if (options_.modeMaps) {
+        // (noxcpp) Its mode's own maps too, by the same rules (a name the folder has is the mode's).
+        std::vector<std::string> own;
+        addModeMapNames(own, options_.modeMaps.get());
+        for (std::string& name : own) {
+            const bool solo = name.size() > 3 && '0' <= name[3] && name[3] <= '9' &&
+                              (util::equalsNoCase(name.substr(0, 3), "wiz") || util::equalsNoCase(name.substr(0, 3), "war") ||
+                               util::equalsNoCase(name.substr(0, 3), "con"));
+            name = name.substr(0, 8);
+            if (!solo && mapModesOf(name) != 0 &&
+                std::ranges::none_of(names, [&](const std::string& n) { return util::equalsNoCase(n, name); })) {
+                names.push_back(std::move(name));
+            }
         }
     }
     std::ranges::sort(names); // (maplist_add: strcmp order)
@@ -3903,8 +4169,7 @@ void GameHost::loadNextMap()
         }
     }
     namespace fs = std::filesystem;
-    const fs::path mapsDir = !options_.mapsDir.empty() ? options_.mapsDir : mapPath_.parent_path().parent_path();
-    const auto pathOf = [&](const std::string& name) { return mapsDir / name / (name + ".map"); };
+    const auto pathOf = [&](const std::string& name) { return findMap(name); };
     fs::path next = mapPath_;
     std::string waypoint; // (mapLoad: "map:waypoint", the players put there)
     if (exitTo) {
@@ -3944,6 +4209,39 @@ void GameHost::loadNextMap()
         next = mapPath_;
         file = map::loadMapFile(next);
     }
+    // (noxcpp's) A map whose script uses the original game's memory tricks isn't loaded: the game
+    // stays on the map it's on, loaded again as for a map that can't be read (a solo game's from the
+    // copy its exit just saved: the player at the exit's way out), and everyone is told why. (The
+    // map it's on was checked as it loaded.)
+    bool refused = false;
+    if (next != mapPath_) {
+        if (const auto trick = memoryTricksOf(file)) {
+            const std::string name = next.stem().string();
+            logRefusedMap(name, *trick, "not loaded; the game stays on " + mapPath_.stem().string());
+            announce(strings::fromUtf8(script::memoryTricksNotice(name)));
+            refused = true;
+            next = mapPath_;
+            file = map::loadMapFile(next);
+            waypoint.clear();
+            World& world = server_.world();
+            if (exitTo && !options_.saveDir.empty()) {
+                if (const auto copy = savedMapCopy(options_.saveDir, mapPath_.filename().string())) {
+                    world.switchToSolo = true;
+                    world.noMultiplayer = true;
+                    world.soloPath = copy->string();
+                    refused = false; // (that copy is what loads)
+                }
+            }
+            if (refused) {
+                // The map it's on from its file: a first visit's start (GLOBAL, MapInitialize), not
+                // a saved copy's, which a saved game's load or an exit asked for the refused map
+                // (switch-to-solo), and its client reads the map, not that copy.
+                world.switchToSolo = false;
+                world.noMultiplayer = false;
+                world.soloPath.clear();
+            }
+        }
+    }
     mapPath_ = next;
     mapFile_ = next.filename().string();
     mapCrc_ = file.crc;
@@ -3953,7 +4251,7 @@ void GameHost::loadNextMap()
     // Map_SetCrc of the file read). The clients are told the map's name with that CRC; a solo
     // game's one client is the host's own, which reads the copy too (gameChangeMap
     // while gameIsNotMultiplayer: HeadlessClient::setSoloMap).
-    if (exitTo && server_.world().switchToSolo && !server_.world().soloPath.empty()) {
+    if (exitTo && !refused && server_.world().switchToSolo && !server_.world().soloPath.empty()) {
         file = map::loadMapFile(fs::path(server_.world().soloPath));
         mapCrc_ = file.crc;
     }
@@ -3978,6 +4276,11 @@ void GameHost::loadNextMap()
     fastMapRequests_.clear(); // (noxcpp's fast map send: each client's first requests of this map)
     if (!(server_.world().gameFlags & GameFlag::Solo)) {
         mapSendLoadMap(); // (and, not in a solo game, its .nxz for downloads)
+    } else if (options_.soloGuests > 0) {
+        // (noxcpp) A solo game with guests: the last map's download gone, this one's read when a
+        // guest asks for it (mapSendLoadForGuests; the load aborted every send: nextMap).
+        mapSendData_.clear();
+        mapSendName_.clear();
     }
     // What the load tells the players goes through the important queue, and the load tick began
     // with every player's status 0x10 cleared (before): each gets it at
@@ -4037,8 +4340,32 @@ void GameHost::loadNextMap()
     server_.world().removed().clear();
 }
 
+bool GameHost::unicodePeer(std::uint8_t peer) const
+{
+    return transport_.clientLevel(peer) >= lobby::kUnicodeTextLevel;
+}
+
+strings::LegacyText GameHost::peerText(std::uint8_t peer) const
+{
+    return unicodePeer(peer) ? strings::LegacyText{} : strings::wireText();
+}
+
+std::optional<std::vector<std::uint8_t>> GameHost::textFor(std::uint8_t peer, std::span<const std::uint8_t> m) const
+{
+    // (noxcpp: the messages are made in Unicode; only a host whose convention isn't Latin-1 has
+    // anything to change, for a client that isn't a NoX Core one of kUnicodeTextLevel.)
+    const strings::LegacyText text = strings::wireText();
+    if (text.plain() || unicodePeer(peer)) {
+        return std::nullopt;
+    }
+    return World::textForStock(m, text);
+}
+
 void GameHost::sendImportant(std::uint8_t peer, std::vector<std::uint8_t> bytes, bool onlyJoined)
 {
+    if (auto t = textFor(peer, bytes)) {
+        bytes = std::move(*t); // (noxcpp: its text as the client takes it)
+    }
     // (netImportant returns at once for a player without status 0x10: its
     // messages stay queued, oldest first, till its CLIENT_READY's frame; an onlyJoined one is
     // dropped then for a player not in the game.)
@@ -4061,12 +4388,14 @@ void GameHost::sendImportantToAll(std::span<const std::uint8_t> bytes, bool only
         if (except && peer == *except) {
             continue;
         }
+        const auto text = textFor(peer, bytes); // (noxcpp: its text as the client takes it)
+        const std::span<const std::uint8_t> m = text ? std::span<const std::uint8_t>(*text) : bytes;
         if (p.ready) {
             if (!onlyJoined || p.joined) {
-                transport_.sendReliable(peer, bytes);
+                transport_.sendReliable(peer, m);
             }
         } else if (p.joined) {
-            p.pending.push_back({std::vector<std::uint8_t>(bytes.begin(), bytes.end()), onlyJoined});
+            p.pending.push_back({std::vector<std::uint8_t>(m.begin(), m.end()), onlyJoined});
         }
     }
 }
@@ -4223,9 +4552,13 @@ void strncpyAt(GameHost::SettingsRecord& r, std::size_t at, std::string_view s, 
     }
 }
 
-/// "%S" of a wide field: its letters as bytes (the C locale's: past 0x7F, '?').
+/// "%S" of a wide field: its letters as bytes (the C locale's: past 0x7F, '?'). (noxcpp: a Russian
+/// install's Cyrillic as its Windows-1251 bytes, as that install's game has them.)
 std::string narrow(std::string_view utf8)
 {
+    if (strings::wireCodepage() != strings::LegacyCodepage::Latin1) {
+        return strings::utf8ToWire8(utf8);
+    }
     std::string out;
     for (const char16_t c : strings::fromUtf8(std::string(utf8))) {
         out += c < 0x80 ? static_cast<char>(c) : '?';
@@ -4365,7 +4698,7 @@ void GameHost::refreshSettingsSlot0(bool allOn)
     if (const auto time = static_cast<std::uint8_t>(world.timeLimits[mode]); s[0x38] != time) {
         s[0x38] = time;
     }
-    const std::string name = options_.serverName;
+    const std::string name = strings::utf8ToWire8(options_.serverName); // (the original's 8-bit text)
     if (cStringAt(s, 9).substr(0, 15) != name) {
         strncpyAt(s, 9, name, 15);
     }
@@ -4783,7 +5116,8 @@ std::uint32_t GameHost::extendedFeatures() const
     return lobby::ServerFeature::HighRate | options_.features |
            (options_.noxcppMessages.contains(static_cast<std::uint8_t>(net::Op::NoxcppEdit)) ? lobby::ServerFeature::EditSession : 0u) |
            (options_.stockRefusal ? lobby::ServerFeature::NoxCoreOnly : 0u) | // (noxsdl's browser marks it NoX Core only)
-           (options_.pickupAnyClass ? lobby::ServerFeature::PickupAnyClass : 0u); // (World::pickupAnyClass: noxsdl's cursor no Caution then)
+           (options_.pickupAnyClass ? lobby::ServerFeature::PickupAnyClass : 0u) | // (World::pickupAnyClass: noxsdl's cursor no Caution then)
+           (strings::wireText().plain() ? 0u : lobby::ServerFeature::RecodesText); // (textFor: Unicode clients get real Unicode here)
 }
 
 lobby::ExtendedServer GameHost::extendedServer() const

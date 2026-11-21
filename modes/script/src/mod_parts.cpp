@@ -1,6 +1,7 @@
 // A script mode's parts' toolbox functions and configure's quest options (mod_parts.hpp).
 #include "mod_parts.hpp"
 
+#include "mod_camera.hpp"
 #include "mod_items.hpp"
 #include "toolbox.hpp"
 
@@ -23,8 +24,8 @@ namespace {
 
 namespace ev = server::ModeEvent;
 
-/// The event bits a script may set (Use, 0x20, is kept for later).
-constexpr std::uint8_t kWatchable = ev::Death | ev::Destroyed | ev::Damage | ev::Damaged | ev::Drop | ev::Equip;
+/// The event bits a script may set.
+constexpr std::uint8_t kWatchable = ev::Death | ev::Destroyed | ev::Damage | ev::Damaged | ev::Drop | ev::Equip | ev::Use | ev::Pickup;
 
 std::uint32_t frameNow(lua_State* L)
 {
@@ -68,7 +69,7 @@ int noxWatchEvents(lua_State* L)
     luaL_argcheck(L, !toolbox::hidden(L, o), 1, "no such thing (gone?)");
     const double mask = luaL_checknumber(L, 2);
     luaL_argcheck(L, mask >= 0 && mask <= 255 && mask == std::floor(mask) && (static_cast<unsigned>(mask) & ~kWatchable) == 0, 2,
-                  "a sum of nox.events' bits (death, destroyed, damage, damaged, drop, equip)");
+                  "a sum of nox.events' bits (death, destroyed, damage, damaged, drop, equip, use, pickup)");
     lua_pushnumber(L, o.modeEvents & kWatchable);
     o.modeEvents = static_cast<std::uint8_t>((o.modeEvents & ~kWatchable) | static_cast<std::uint8_t>(mask));
     return 1;
@@ -79,6 +80,7 @@ void pushEvents(lua_State* L)
     static constexpr std::pair<const char*, std::uint8_t> kBits[] = {
         {"death", ev::Death}, {"destroyed", ev::Destroyed}, {"damage", ev::Damage},
         {"damaged", ev::Damaged}, {"drop", ev::Drop},       {"equip", ev::Equip},
+        {"use", ev::Use},         {"pickup", ev::Pickup},
     };
     lua_createtable(L, 0, static_cast<int>(std::size(kBits)));
     for (const auto& [name, bit] : kBits) {
@@ -179,6 +181,8 @@ void addPartsToolbox(lua_State* L, bool store, bool records)
     addDrawScaleToolbox(L);
     addLeapToolbox(L);
     addAbilityToolbox(L);
+    addCameraToolbox(L);
+    addTextsToolbox(L);
 }
 
 void applyHostOptions(lua_State* L, int t, server::GameHost::Options& o, const Generation& gen, const std::string& firstMap)

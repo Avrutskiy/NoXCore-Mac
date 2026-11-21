@@ -11,6 +11,7 @@
 #include "noxcore/mapedit/document.hpp"
 #include "noxcore/mapedit/ops.hpp"
 #include "noxcore/mapedit/selection.hpp"
+#include "noxcore/strings/l10n.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -129,6 +130,8 @@ Op movePolygonsOp(const MapDocument& doc, const std::set<std::uint32_t>& keys, f
 /// The group kinds' names (Objects, Waypoints, Walls, Groups: kind 3 is a group of groups, its
 /// members other groups' ids, walked recursively by the scripts' for-each).
 const char* groupKindName(map::Group::Kind kind);
+/// The same as a key and its English (an op label's {kind}: op_label.hpp).
+const nox::l10n::Key& groupKindKey(map::Group::Kind kind);
 /// The longest group name the game's reader holds (its buffer, the NUL included in the 76).
 constexpr std::size_t kGroupNameMax = 75;
 /// An id no group has (the least above the others'). Scripts name groups by id (the name turns
@@ -160,10 +163,11 @@ std::vector<std::string> groupProblems(const MapDocument& doc, std::size_t index
 
 // --- Map info ------------------------------------------------------------------------------------
 
-/// Text as the map stores it (the game's 8-bit Windows-1252 text) from UTF-8: characters it can't
-/// hold become '?' (and `lossy` is set).
+/// Text as the map stores it (the game's 8-bit Windows-1252 text; Windows-1251 on a Russian fan
+/// translation's install, strings::wireCodepage) from UTF-8: characters it can't hold become '?'
+/// (and `lossy` is set).
 std::string toMapText(std::string_view utf8, bool* lossy = nullptr);
-/// The map's 8-bit text as UTF-8.
+/// The map's 8-bit text as UTF-8 (as toMapText's codepage reads it).
 std::string fromMapText(std::string_view text);
 /// UTF-8 text as the map stores it, cut to at most `maxBytes` bytes. `lossy`: characters became
 /// '?'; `cut`: it was longer.

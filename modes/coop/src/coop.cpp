@@ -74,6 +74,17 @@ std::string runnerKey(const server::HostedPlayer& p)
     return account.empty() ? p.name : account + "/" + p.name;
 }
 
+std::string olderRunnerKey(const server::HostedPlayer& p)
+{
+    // (The host kept a name's ASCII letters alone then, '?' for each other UTF-16 unit.)
+    std::string name;
+    for (const char16_t c : p.wideName) {
+        name += c < 0x80 ? static_cast<char>(c) : '?';
+    }
+    const std::string whole = runnerKey(p);
+    return whole.substr(0, whole.size() - p.name.size()) + name;
+}
+
 CoopDirector::CoopDirector(Options options)
     : options_(options)
     , rng_(options.seed)
@@ -239,6 +250,13 @@ void CoopDirector::joined(server::GameHost& host, std::uint8_t peer, server::Ser
     }
     Member m;
     m.key = runnerKey(it->second);
+    // (A campaign saved before the host kept whole names knows a runner whose name isn't all
+    // ASCII by olderRunnerKey: that key while the campaign has no record under the whole one.)
+    if (!records_.contains(m.key)) {
+        if (std::string older = olderRunnerKey(it->second); older != m.key && records_.contains(older)) {
+            m.key = std::move(older);
+        }
+    }
     m.name = it->second.name;
     m.peer = peer;
     m.extent = unit.extent;
@@ -481,6 +499,8 @@ void CoopDirector::tellHello(server::GameHost& host, const Member& m)
     h.maxPlayers = static_cast<std::uint8_t>(options_.maxPlayers);
     h.youAreHost = m.host;
     h.characterKept = m.restored;
+    h.campaignId = options_.campaignId; // (the game's own: none, the message as it always was)
+    h.campaignTitle = options_.campaignTitle;
     if (const server::ServerObject* u = server::hostPlayer(world())) {
         h.hostNetCode = server::netCodeOf(*u);
     }

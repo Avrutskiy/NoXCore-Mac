@@ -91,12 +91,8 @@ constexpr float kTrapNear = 2.0f;
 
 std::string CoopDirector::nameOf(const server::ServerObject& unit) const
 {
-    std::string name;
-    if (unit.player) {
-        for (const char16_t c : unit.player->name) {
-            name += c < 0x80 ? static_cast<char>(c) : '?';
-        }
-    }
+    const std::string name = unit.player ? strings::toUtf8(unit.player->name) : std::string();
+
     return name.empty() ? std::string("A player") : name;
 }
 
@@ -484,7 +480,7 @@ void CoopDirector::readPristine(server::Server& server)
     if (mapsDir.empty() || w.mapName.empty()) {
         return;
     }
-    const std::filesystem::path own = resolveNoCase(mapsDir / w.mapName / (w.mapName + ".map"));
+    const std::filesystem::path own = resolveNoCase(host_->findMap(w.mapName)); // (a mode's own map, else the maps folder's)
     std::error_code ec;
     if (!std::filesystem::exists(own, ec)) {
         return;
@@ -569,6 +565,23 @@ void CoopDirector::clientReady(server::GameHost& host, std::uint8_t peer)
     const auto it = std::ranges::find_if(party_, [&](const Member& m) { return m.peer == peer; });
     if (it == party_.end()) {
         return;
+    }
+    // A guest that downloaded the map, or a campaign mod's game data, went watching as it asked
+    // for it, out of its team (the game's map request: Plr_GoObserver, free to join). The game's
+    // way back is its own Action, alone at a player start (Plr_UpdateObserver's rejoin), not with
+    // the party: so it's back in play now, in the party's team by the host, as its join put it.
+    // Only that one (GameHost::watchingForDownload): a guest watching by its own choice (the
+    // observer command, an idle client's) or a mode's hold stays watching, as in the game.
+    if (server::ServerObject* u = it->host ? nullptr : host.unitOf(peer); u && u->player && host.watchingForDownload(peer)) {
+        server::Fight f = host.server().fight();
+        server::leaveObserver(f, *u);
+        u->player->cameraFollow = 0;
+        u->player->freeCam = false;
+        intoTeam(*u);
+        if (const server::ServerObject* h = server::hostPlayer(world())) {
+            const auto [x, y] = server::clearPointNear(world(), rng_, h->x, h->y, 50.0f);
+            server::setPosition(world(), *u, x, y, host.server().clock().frame());
+        }
     }
     tellTeam(*it);
     if (it->host) {

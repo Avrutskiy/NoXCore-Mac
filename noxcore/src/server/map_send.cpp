@@ -21,12 +21,18 @@
 // unacknowledged packet again after 2 s, the one an acknowledgement names at once). Every other
 // client (stock, or a NoX Core one below that level) and every later request gets the stock stream
 // above, byte for byte.
+//
+// noxcpp's co-op downloads (a solo game with guests, GameHost::Options::soloGuests): the exe's solo
+// game loads nothing to send, so a guest's request reads the map's .nxz then, or makes it from the
+// .map when the map ships none (mapSendLoadForGuests). A mode's own maps (Options::modeMaps) are
+// sent from its folder (mapSendFile).
 #include "noxcore/server/game_host.hpp"
 
 #include "noxcore/io/file.hpp"
 #include "noxcore/lobby/extended.hpp"
 #include "noxcore/server/modes.hpp"
 #include "noxcore/strings/string_table.hpp"
+#include "noxcore/video/nxz.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -60,9 +66,9 @@ bool GameHost::mapSendLoadMap()
     }
     const std::string current = mapFile_;
     if (!current.empty()) {
-        const std::string stem = mapPath_.stem().string();
-        std::ifstream in(resolveNoCase(mapsDir() / stem / (stem + ".nxz")), std::ios::binary); // (any case, as on Windows)
-        if (in) {
+        const std::filesystem::path nxz = mapSendFile(mapPath_.stem().string());
+        std::ifstream in(resolveNoCase(nxz), std::ios::binary); // (any case, as on Windows)
+        if (!nxz.empty() && in) {
             mapSendData_.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
             mapSendName_ = current;
             return true;
@@ -72,22 +78,88 @@ bool GameHost::mapSendLoadMap()
     return false;
 }
 
-void GameHost::onRequestMap(std::uint8_t peer)
+std::filesystem::path GameHost::mapSendFile(const std::string& stem) const
 {
-    // SrvNet_OnPacket's 0xB6 first: the player goes observing (Plr_GoObserver(.., 1, 1): free to
-    // join, forced) and leaves its team (Team_RemoveMember).
+    // (noxcpp) A mode's own map's beside it, as its index found it (checked inside the mode's
+    // folder then); else the maps folder's, as the exe's.
+    if (options_.modeMaps) {
+        if (const ModeMaps::Entry* own = options_.modeMaps->find(stem)) {
+            return own->nxz;
+        }
+    }
+    return mapsDir() / stem / (stem + ".nxz");
+}
+
+bool GameHost::mapSendLoadForGuests()
+{
+    // The map's own file (a saved game's copy aside: a guest is told the map's CRC, pristineCrc_,
+    // and reads the state from the game), its .nxz as shipped, else made from its .map as stored:
+    // u32 that size, then the NXZ stream of those bytes (the .nxz layout every client reads).
+    mapSendData_.clear();
+    mapSendName_.clear();
+    const std::string stem = mapPath_.stem().string();
+    if (stem.empty()) {
+        return false;
+    }
+    std::error_code ec;
+    if (const std::filesystem::path nxz = resolveNoCase(mapSendFile(stem)); !nxz.empty() && std::filesystem::is_regular_file(nxz, ec)) {
+        try {
+            mapSendData_ = readFileBytes(nxz);
+        } catch (const std::exception&) {
+            mapSendData_.clear();
+        }
+    }
+    if (mapSendData_.empty()) {
+        try {
+            const std::vector<std::uint8_t> stored = readFileBytes(resolveNoCase(findMap(stem)));
+            const auto size = static_cast<std::uint32_t>(stored.size());
+            mapSendData_ = {static_cast<std::uint8_t>(size), static_cast<std::uint8_t>(size >> 8), static_cast<std::uint8_t>(size >> 16),
+                            static_cast<std::uint8_t>(size >> 24)};
+            const std::vector<std::uint8_t> packed = video::nxzCompress(stored);
+            mapSendData_.insert(mapSendData_.end(), packed.begin(), packed.end());
+        } catch (const std::exception&) {
+            mapSendData_.clear();
+        }
+    }
+    if (mapSendData_.empty()) {
+        mapSendPrint("mapsend.c:CompressFail");
+        return false;
+    }
+    mapSendName_ = mapFile_;
+    return true;
+}
+
+void GameHost::watchForDownload(std::uint8_t peer)
+{
+    // The player goes observing (Plr_GoObserver(.., 1, 1): free to join, forced) and leaves its
+    // team (Team_RemoveMember).
     if (const auto it = players_.find(peer); it != players_.end()) {
         if (ServerObject* unit = server_.world().byExtent(it->second.extent); unit && unit->player) {
+            const bool inPlay = !unit->player->observing;
             Fight f = server_.fight();
             goObserver(f, *unit, true, true);
             removeTeamMember(server_.world(), *unit);
+            // (noxcpp) Watching for this download alone, not by a choice of its own: a mode may put
+            // it back in play at the ready that follows (watchingForDownload).
+            it->second.watchingForDownload = inPlay || it->second.watchingForDownload;
         }
     }
+}
+
+void GameHost::onRequestMap(std::uint8_t peer)
+{
+    // SrvNet_OnPacket's 0xB6 first: the player watches the download (watchForDownload).
+    watchForDownload(peer);
     // SrvNet_OnRequestMap: counted as under way even when it's turned down (an original bug);
     // an idle sender starts: block 1, 512 bytes a block, the size loaded, the time.
     ++mapSendsInProgress_;
     MapSender& s = mapSenders_[peer];
     if (s.state == 0) {
+        // (noxcpp) A solo game with guests has nothing loaded for downloads till one asks (the exe's
+        // solo game never has a guest to ask: its size here, 0, would be the send's whole).
+        if (options_.solo && options_.soloGuests > 0 && mapSendName_ != mapFile_) {
+            mapSendLoadForGuests();
+        }
         ++mapSendsStarted_;
         s.state = 1;
         s.sent = 0;
@@ -136,6 +208,9 @@ void GameHost::onCancelMap(std::uint8_t peer)
 {
     // SrvNet_OnCancelMap: its sender reset (its own copy freed).
     mapSendReset(mapSenders_[peer]);
+    if (const auto p = players_.find(peer); p != players_.end()) {
+        p->second.watchingForDownload = false; // (noxcpp: no download's ready to come: watching as the game leaves it)
+    }
     if (mapSendsInProgress_ != 0) {
         --mapSendsInProgress_;
     }

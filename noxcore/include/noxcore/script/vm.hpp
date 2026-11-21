@@ -45,10 +45,19 @@ class Vm;
 class Host {
 public:
     virtual ~Host() = default;
-    /// Runs builtin `id`: pops its arguments from the VM's stack (the last first) and pushes
-    /// its result, if any. 1 ends the calling function (StopScript and the like); the rest
-    /// return 0.
+    /// Runs builtin `id` (the game's, below kBuiltinCount, or one in NoX Core's range, opcodes.hpp:
+    /// known to this build or not, its id says its arity): pops its arguments from the VM's stack
+    /// (the last first) and pushes its result, if any. 1 ends the calling function (StopScript
+    /// and the like); the rest return 0.
     virtual int builtin(std::uint32_t id, Vm& vm) = 0;
+    /// A CallBuiltin of an id outside both (nobody knows what it pops): the VM does nothing for it
+    /// (nothing popped or pushed, as ever); the host hears of it to say so. `function`: the
+    /// calling function's index.
+    virtual void unknownBuiltin(std::uint32_t id, std::size_t function)
+    {
+        (void)id;
+        (void)function;
+    }
     /// The trigger object's script variable `word` (0 when there's none).
     virtual std::uint32_t objectVar(std::int32_t word) { (void)word; return 0; }
     virtual void setObjectVar(std::int32_t word, std::uint32_t value) { (void)word; (void)value; }
@@ -155,6 +164,13 @@ public:
 
     std::uint32_t caller() const noexcept { return caller_; }
     std::uint32_t trigger() const noexcept { return trigger_; }
+    /// The running call's caller and trigger put back after a nested call made with others
+    /// (ScriptHost::callHandler; call() sets them and leaves them so).
+    void restoreCallerTrigger(std::uint32_t caller, std::uint32_t trigger) noexcept
+    {
+        caller_ = caller;
+        trigger_ = trigger;
+    }
     const BuiltinContext& context() const noexcept { return context_; }
 
     /// The globals (function 1's locals), as a savegame keeps them.

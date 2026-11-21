@@ -2,6 +2,8 @@
 // they lead to one another); the XWIS chat lobby screen is in menus_wolchat.cpp.
 #include "menus.hpp"
 
+#include "campaign_line.hpp"
+#include "character_labels.hpp"
 #include "cinematics.hpp"
 #include "client_level_gate.hpp"
 #include "console.hpp"
@@ -14,8 +16,10 @@
 #include "noxcore/client/text_fields.hpp"
 #include "noxcore/io/file.hpp"
 #include "noxcore/lobby/extended.hpp"
+#include "noxcore/modes/registry.hpp"
 #include "noxcore/server/rules.hpp"
 #include "noxcore/server/solo_save.hpp"
+#include "noxcore/strings/l10n.hpp"
 #include "noxcore/util/random.hpp"
 
 #include <algorithm>
@@ -53,6 +57,11 @@ constexpr std::int32_t kInfoList = 10034, kInfoUp = 10035, kInfoDown = 10036, kI
 // SelChar.wnd
 constexpr std::int32_t kCharNew = 501, kCharLoad = 502, kCharDelete = 503, kCharUp = 504, kCharDown = 505,
                        kCharLabel = 509, kCharLists = 510, kCharKind = 511, kCharName = 512;
+// (noxcpp) The network character screen's added windows (character_labels.hpp): the selected
+// character's places, above the lists where the game's layout is empty; the switch, under the
+// buttons. None of the game's window files use these ids.
+constexpr std::int32_t kCharPlaces = 4291, kCharSwitch = 4292;
+constexpr SDL_Rect kCharPlacesRect{108, 92, 400, 14}, kCharSwitchRect{140, 399, 336, 15};
 // dlg.wnd
 constexpr std::int32_t kDlgOk = 4001, kDlgCancel = 4002, kDlgText = 4004, kDlgTitle = 4005, kDlgNo = 4006,
                        kDlgYes = 4007;
@@ -164,7 +173,7 @@ void Menus::wip(gui::Window* top, std::int32_t id)
     // Not hooked up yet: off, and marked.
     if (gui::Window* w = top ? top->find(id) : nullptr) {
         enable(top, id, false);
-        w->text += " - WIP";
+        w->text += NOX_TR("menus.common.wip_suffix", " - WIP");
     }
 }
 
@@ -368,7 +377,18 @@ void Menus::askJoinPassword(const std::string& host, const nox::client::PlayerPr
 
 void Menus::tooOldNotice()
 {
-    dialog(gui_.text("Noxworld.c:Notification"), std::string(nox::lobby::kClientTooOldNotice), 0x21, {});
+    // (kClientTooOldNotice stays English: the server sends it to stock clients too.)
+    dialog(gui_.text("Noxworld.c:Notification"), NOX_TR("menus.dialog.client_too_old", "Your NoX Core is too out of date for this game."), 0x21, {});
+}
+
+void Menus::memoryTricksNotice(const std::string& map)
+{
+    // (The server's own words, script::memoryTricksNotice, are English: it tells stock clients too.)
+    dialog(gui_.text("Noxworld.c:Notification"),
+           nox::l10n::format(NOX_TR("script.memory_tricks",
+                                    "{map} uses memory tricks of the original game that NoX Core does not run. Look for a NoX Core version of it."),
+                             {{"map", map}}),
+           0x21, {});
 }
 
 void Menus::enable(gui::Window* top, std::int32_t id, bool on)
@@ -419,7 +439,7 @@ void Menus::enter(State s)
         if (gui::Window* modes = screen_->find(kSoloQuest)) {
             // (noxcpp: Solo Quest's button opens Game Modes, soloModes; the .wnd's own font,
             // only its GeneralPrint:SoloQuest text replaced. No main-menu button has a tooltip.)
-            modes->text = "Game Modes";
+            modes->text = NOX_TR("menus.main.game_modes", "Game Modes");
         }
         optsBack_->show(true);
         break;
@@ -441,10 +461,39 @@ void Menus::enter(State s)
         optsBack_->show(true);
         break;
     case State::SelChar: {
-        // game_showSelChar: from 440 above; the three lists move together.
-        screen_ = gui_.load(windowDir_ / "SelChar.wnd", [this](gui::Window&, int message, gui::Window& from) {
+        // game_showSelChar: from 440 above; the three lists move together. (noxcpp: a mod's
+        // campaign named between the heading and the lists: campaign_line.hpp.)
+        nox::gui::WindowDef def = nox::gui::loadWindowFile(windowDir_ / "SelChar.wnd");
+        const std::string campaign = solo_ ? soloCampaignTitle() : std::string();
+        addCampaignLine(def, campaign, 108, 92, 400, 14);
+        if (!solo_) {
+            // (noxcpp: where the selected character was last played, above the lists; under the
+            // buttons, when the game is a mode's, the switch between every character and that
+            // mode's alone: character_labels.hpp. With no notes and no mode, nothing shows.)
+            const auto add = [&def](std::int32_t id, const SDL_Rect& r, bool clickable) {
+                nox::gui::WindowDef w;
+                w.id = id;
+                w.x = r.x;
+                w.y = r.y;
+                w.width = r.w;
+                w.height = r.h;
+                w.typeName = "USER";
+                w.type = nox::gui::WindowType::User;
+                w.status = clickable ? (st::Enabled | st::NoFocus) : st::NoFocus;
+                def.children.push_back(std::move(w));
+            };
+            add(kCharPlaces, kCharPlacesRect, false);
+            if (charTarget_.any) {
+                add(kCharSwitch, kCharSwitchRect, true);
+            }
+        }
+        screen_ = gui_.load(def, [this](gui::Window&, int message, gui::Window& from) {
             return shellSound(message) && message == gui::Clicked && onSelChar(from);
         });
+        drawCampaignLine(screen_, campaign);
+        if (!solo_) {
+            drawCharacterExtras();
+        }
         slides_.push_back(gui_.slideIn(screen_, {0, -440}, {0, 20}, {0, -40}));
         if (gui::Window* lists = screen_->find(kCharLists)) {
             lists->proc = screen_->proc; // wndSetProc: the lists' clicks reach the screen
@@ -481,25 +530,49 @@ void Menus::enter(State s)
         break;
     }
     case State::SelClass: {
-        // game_showSelClass: from 460 above. The portraits not picked are darkened.
-        screen_ = gui_.load(windowDir_ / "SelClass.wnd", [this](gui::Window&, int message, gui::Window& from) {
+        // game_showSelClass: from 460 above. The portraits not picked are darkened. (noxcpp: a
+        // mod's campaign named above the portraits: campaign_line.hpp.)
+        nox::gui::WindowDef def = nox::gui::loadWindowFile(windowDir_ / "SelClass.wnd");
+        const std::string campaign = solo_ ? soloCampaignTitle() : std::string();
+        addCampaignLine(def, campaign, 99, 1, 442, 12);
+        screen_ = gui_.load(def, [this](gui::Window&, int message, gui::Window& from) {
             return shellSound(message) && onSelClass(message, from);
         });
+        drawCampaignLine(screen_, campaign);
         slides_.push_back(gui_.slideIn(screen_, {0, -460}, {0, 20}, {0, -40}));
         chosenClass_ = -1;
         for (std::int32_t id = kClassFirst; id <= kClassLast; ++id) {
             if (gui::Window* w = screen_->find(id)) {
-                w->draw = [this](gui::Window& self, gui::Painter& p) {
-                    if (self.id != chosenClass_) {
+                // (noxcpp: a class a mod's campaign doesn't offer darker still, and off below:
+                // campaign_text.hpp's classPortraitShade. Every class offered otherwise.)
+                w->draw = [this, offered = classOffered(id - kClassFirst)](gui::Window& self, gui::Painter& p) {
+                    if (const std::uint8_t shade = classPortraitShade(self.id == chosenClass_, offered); shade != 0) {
                         const SDL_Point pos = self.screenPos();
-                        p.fillAlpha(pos.x, pos.y, self.rect.w, self.rect.h, {0, 0, 0, 128});
+                        p.fillAlpha(pos.x, pos.y, self.rect.w, self.rect.h, {0, 0, 0, shade});
                     }
                 };
             }
         }
         // Back from Options: the class picked as it was (the game's has none picked again).
-        if (const auto kept = kept_.take<optionstrip::SelClassKept>(); kept && kept->chosen >= 0) {
+        if (const auto kept = kept_.take<optionstrip::SelClassKept>(); kept && kept->chosen >= 0 && classOffered(kept->chosen - kClassFirst)) {
             pickClass(kept->chosen);
+        }
+        // (noxcpp) A mod's campaign is played as its classes alone: the others' portraits off (darker
+        // than a class not picked, above, and never picked), and its one class picked when it has one.
+        if (soloCampaignInfo()) {
+            int offered = 0;
+            std::int32_t only = -1;
+            for (std::int32_t id = kClassFirst; id <= kClassLast; ++id) {
+                if (classOffered(id - kClassFirst)) {
+                    ++offered;
+                    only = id;
+                } else {
+                    enable(screen_, id, false);
+                }
+            }
+            if (offered == 1 && chosenClass_ < 0) {
+                pickClass(only);
+            }
         }
         optsBack_->show(true);
         break;
@@ -573,9 +646,9 @@ void Menus::enter(State s)
         }
         wip(screen_, kFilters);
         if (auto* button = screen_->find(kFind)) {
-            button->text = "Add/Remove";
+            button->text = NOX_TR("menus.servers.add_remove", "Add/Remove");
             button->show(true);
-            button->tooltip = "Add or remove saved server addresses";
+            button->tooltip = NOX_TR("menus.servers.add_remove_tip", "Add or remove saved server addresses");
             gui::setEnabled(button, true);
         }
         if (gui::Window* list = screen_->find(kList)) {
@@ -585,7 +658,7 @@ void Menus::enter(State s)
             status->text = gui_.text("Noxworld.c:JoinServer"); // game_showGameSel, the network (LAN) version's prompt
         }
         if (gui::Window* hostQuest = screen_->find(kHostQuest)) {
-            hostQuest->text = "Host Custom"; // (noxcpp: a quest or a NoX Core mode, chosen on its click)
+            hostQuest->text = NOX_TR("menus.servers.host_custom", "Host Custom"); // (noxcpp: a quest or a NoX Core mode, chosen on its click)
         }
         // The screen draws its background, then our game list in the map's frame.
         screen_->draw = [this](gui::Window& w, gui::Painter& p) {
@@ -778,7 +851,32 @@ void Menus::onSoloScreensMode(const std::string& modeId)
 
 std::filesystem::path Menus::soloRoot() const
 {
-    return soloScreensMode_.empty() ? saveRoot_ : modeSaveRoot(saveRoot_, soloScreensMode_);
+    return soloScreensMode_.empty() ? saveRoot_ : modeSaveRoot(saveRoot_, soloScreensMode_, soloCampaign());
+}
+
+std::string Menus::soloCampaign() const
+{
+    if (soloScreensMode_.empty()) {
+        return {};
+    }
+    const auto c = nox::modes::option(pendingModeOptions_, "campaign");
+    return c ? std::string(*c) : std::string();
+}
+
+std::string Menus::soloCampaignTitle() const
+{
+    const nox::modes::CampaignInfo* c = soloCampaignInfo();
+    return c ? c->title : std::string();
+}
+
+const nox::modes::CampaignInfo* Menus::soloCampaignInfo() const
+{
+    const std::string id = soloCampaign();
+    if (id.empty()) {
+        return nullptr;
+    }
+    const nox::modes::Mode* m = nox::modes::registry().find(id);
+    return m && m->info.campaign ? &*m->info.campaign : nullptr;
 }
 
 void Menus::startSolo(const SoloStart& start)
@@ -807,6 +905,7 @@ void Menus::onSoloQuest()
     soloScreensMode_.clear();
     questGame_ = true;
     pendingHost_ = std::string(kSoloQuestHost);
+    targetFor(pendingHost_); // (noxcpp: none, a quest)
     viaSelChar_ = nox::client::solo_menu::countQuestCharacters(saveDir_) != 0;
     const State next = viaSelChar_ ? State::SelChar : State::SelClass;
     leave([this, next] { enter(next); });
@@ -840,6 +939,7 @@ void Menus::fillSoloList()
     names->lines.clear();
     lists->selectedLine = dates->selectedLine = names->selectedLine = -1;
     soloSlots_ = saves::list(soloRoot());
+    const std::string campaign = soloCampaignTitle();
     for (int i = 0; i < static_cast<int>(soloSlots_.size()); ++i) {
         const auto& slot = soloSlots_[static_cast<std::size_t>(i)];
         const nox::gui::Color c = paletteWindowColor(saves::lineColor(slot));
@@ -856,11 +956,12 @@ void Menus::fillSoloList()
         if (slot.name == "AUTOSAVE") {
             line += " " + gui_.text("AutoSaveLabel", "GUISave.c");
         } else {
-            line += " - " + gui_.text(std::string(saves::stageLabel(slot.info.questStage, cls)));
+            // (noxcpp: a mod's campaign's at the map it was saved on: campaign_text.hpp.)
+            line += " - " + campaignSavePlace(gui_.text(std::string(saves::stageLabel(slot.info.questStage, cls))), slot.info.mapName, campaign);
         }
         lists->lines.push_back({" ", c});
         dates->lines.push_back({saves::whenText(slot.info.time), c});
-        names->lines.push_back({line, c});
+        names->lines.push_back({campaignSaveLine(std::move(line), campaign), c}); // (noxcpp: a mod's campaign's title after it)
     }
     if (const int newest = saves::latest(soloSlots_); newest != -1) {
         lists->selectedLine = dates->selectedLine = names->selectedLine = newest;
@@ -919,6 +1020,9 @@ bool Menus::onSoloSelChar(gui::Window& from)
         // (Map_SetCurrentPath of the class's first map, then of "%s.map" of the listed record's
         // map, as it is: an empty one is ".map".)
         start.map = menu::continueMap(soloRoot(), gameDir_, slot.info.mapName);
+        if (std::error_code ec; soloCampaignInfo() && !std::filesystem::exists(nox::resolveNoCase(start.map), ec)) {
+            start.map = campaignMapPath(gameDir_, soloCampaign(), slot.info.mapName); // (noxcpp: no saved copy: the mod's map)
+        }
         characterFile_ = slot.plr;
         showLoading(true);
         leave([this, start] { startSolo(start); });
@@ -1000,20 +1104,22 @@ void Menus::setupLogin()
     scrollLogins(std::max(pick - loginLinesShown() / 2, 0));
     // Register: XWIS makes an account on its first login, so it's our way to go on without one.
     if (gui::Window* skip = screen_->find(kLoginSkip)) {
-        skip->text = "Skip Login";
-        skip->tooltip = "Go to the game list with no login name (a game you host is listed on XWIS under a generated one)";
+        skip->text = NOX_TR("lobby.login.skip", "Skip Login");
+        skip->tooltip = NOX_TR("lobby.login.skip_tip",
+                               "Go to the game list with no login name (a game you host is listed on XWIS under a generated one)");
     }
     if (gui::Window* go = screen_->find(kLoginGo)) {
-        go->tooltip = "Log in to XWIS (a new name makes a new account with this password)";
+        go->tooltip = NOX_TR("lobby.login.go_tip", "Log in to XWIS (a new name makes a new account with this password)");
     }
     // Ours: how to log in to XWIS, in the default face at the top of the screen's empty panel on the
     // right (its black box; its border is drawn over it after).
     if (gui::Window* panel = screen_->find(wol_screens::kLoginHelpPanel)) {
-        panel->draw = [textColor = screen_->textColor](gui::Window& w, gui::Painter& p) {
+        panel->draw = [textColor = screen_->textColor, help = nox::l10n::tr(wol_screens::kLoginHelpText)](gui::Window& w,
+                                                                                                         gui::Painter& p) {
             const SDL_Point pos = w.screenPos();
             p.fill(pos.x, pos.y, w.rect.w, w.rect.h, w.backgroundColor);
             constexpr int in = wol_screens::kLoginHelpInset;
-            p.text(std::string(wol_screens::kLoginHelp), pos.x + in, pos.y + in, false, textColor, w.rect.w - 2 * in);
+            p.text(help, pos.x + in, pos.y + in, false, textColor, w.rect.w - 2 * in);
         };
     }
 }
@@ -1259,7 +1365,8 @@ void Menus::showGameInfo(const nox::lobby::ServerEntry& entry, SDL_FPoint at, in
     const auto title = [&](const char* id) { add(gui_.text(std::string("Noxworld.c:") + id), 0xE); };
     const auto gap = [&] { add(" "); }; // (L"\n")
     if (saved || !entry.answered) {
-        add(saved ? "Saved server" : "Server", 0xE);
+        add(saved ? NOX_TR("menus.servers.info_saved_server", "Saved server") : NOX_TR("menus.servers.info_server", "Server"),
+            0xE);
         for (const auto& address : entry.listedAddresses) add(address);
         add(BrowserScreen::statusText(entry));
         gap();
@@ -1773,7 +1880,190 @@ void Menus::loadCharacters()
     // findAutosaves: every .plr in the Save folder read into the records that suit the game
     // (a quest character for a quest game, any other for the rest; an unreadable
     // one out of a quest a zeroed record), newest first.
-    characters_ = nox::client::solo_menu::listCharacters(saveDir_, questGame_);
+    // (noxcpp: each one's note read with it, once: where it was last played, character_labels.hpp)
+    listed_.clear();
+    for (Character& c : nox::client::solo_menu::listCharacters(saveDir_, questGame_)) {
+        std::optional<nox::client::character_notes::Notes> notes;
+        if (!c.path.empty()) {
+            notes = nox::client::character_notes::read(c.path, nox::strings::toUtf8(c.info.name), static_cast<int>(c.info.characterClass));
+        }
+        listed_.push_back({std::move(c), std::move(notes)});
+    }
+    arrangeCharacters();
+}
+
+void Menus::arrangeCharacters()
+{
+    // (noxcpp) Those played at the game's mode first, the most recent there first; the rest as the
+    // game lists them (newest first), unless the switch shows the mode's alone. No mode: as listed.
+    std::vector<const nox::client::character_notes::Notes*> of;
+    of.reserve(listed_.size());
+    for (const Listed& l : listed_) {
+        of.push_back(l.notes ? &*l.notes : nullptr);
+    }
+    characters_.clear();
+    shownNotes_.clear();
+    for (const std::size_t i : nox::client::character_notes::order(of, charTarget_, characterModeOnly())) {
+        characters_.push_back(listed_[i].character);
+        shownNotes_.push_back(of[i]);
+    }
+}
+
+bool Menus::characterModeOnly() const
+{
+    if (!charTarget_.any) {
+        return false;
+    }
+    const auto it = modeOnly_.find(charScreen_);
+    return it != modeOnly_.end() && it->second;
+}
+
+void Menus::targetFor(const std::string& host)
+{
+    // (noxcpp) What's being started: a mode hosted here (Host Custom's, or Game Modes' on this
+    // computer), or a listed game's mode or co-op campaign as its extended reply names it (the
+    // campaign's title for a mod's, the co-op row's name for the game's own). Anything else (Host,
+    // Host Quest, the Map Editor, a stock or arena game): none.
+    namespace charnotes = nox::client::character_notes;
+    charTarget_ = {};
+    charScreen_.clear();
+    if (const std::optional<ModeHost> m = modeOfHostKey(host)) {
+        charScreen_ = m->local ? "local" : "host";
+        const nox::modes::Mode* mode = nox::modes::registry().find(m->id);
+        charTarget_ = {charnotes::Place::Kind::Mode, m->id, mode ? mode->info.name : m->id, true};
+        return;
+    }
+    if (host.starts_with('@')) {
+        return;
+    }
+    charScreen_ = "join";
+    const nox::lobby::ServerEntry* e = browser_.entryFor(host);
+    if (!e) {
+        e = browser_.selectedEntry();
+    }
+    if (!e || !e->extended) {
+        return;
+    }
+    // (the host's name as sent: cleaned as a note's title is, for the switch's words)
+    const std::string name = charnotes::cleanText(e->extended->modeName, charnotes::kMaxTitleBytes);
+    if (e->extended->features & nox::lobby::ServerFeature::CoopCampaign) {
+        const nox::modes::Mode* coop = nox::modes::registry().find("coop");
+        const bool own = name.empty() || (coop && name == coop->info.name);
+        charTarget_ = {charnotes::Place::Kind::Coop, {}, own ? std::string() : name, true};
+        return;
+    }
+    if (name.empty()) {
+        return;
+    }
+    charTarget_ = {charnotes::Place::Kind::Mode, {}, name, true};
+    for (const nox::modes::Mode* m : nox::modes::registry().all()) {
+        if (m && m->info.name == name) {
+            charTarget_.id = m->info.id; // (one of ours by that name: its id)
+            break;
+        }
+    }
+}
+
+std::string Menus::fitToList(const std::string& text, const gui::Window& list)
+{
+    // (Measured as the list draws its lines: its font at its share; a line wider than the list
+    // less 7 would wrap there and stand taller than its row in the other lists. A little spare for
+    // the drawing's rounding at other sizes.)
+    gui::Painter measure(nullptr, gui_.resources(), 2.0f, 0.0f, 0.0f);
+    measure.setLargeScale(list.largeScale);
+    const int room = list.rect.w - 7 - 6;
+    if (measure.textWidth(text, list.largeFont) <= room) {
+        return text;
+    }
+    std::string cut = text;
+    while (!cut.empty()) {
+        do {
+            cut.pop_back(); // (a whole UTF-8 character)
+        } while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80);
+        if (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0xC0) {
+            cut.pop_back();
+        }
+        while (!cut.empty() && cut.back() == ' ') {
+            cut.pop_back();
+        }
+        if (measure.textWidth(cut + "...", list.largeFont) <= room) {
+            return cut + "...";
+        }
+    }
+    return {};
+}
+
+void Menus::drawCharacterExtras()
+{
+    // (noxcpp) The selected character's places above the lists, centred in the small font, the
+    // menus' gold; cut with "..." to the strip. Its text made with the list (placeLines_), each
+    // frame only looked up.
+    gui::Window* names = screen_ ? screen_->find(kCharName) : nullptr;
+    if (gui::Window* w = screen_ ? screen_->find(kCharPlaces) : nullptr; w && names) {
+        w->draw = [this, names, shown = std::string(), from = std::string()](gui::Window& self, gui::Painter& p) mutable {
+            const int sel = names->selectedLine;
+            if (sel < 0 || sel >= static_cast<int>(placeLines_.size()) || placeLines_[static_cast<std::size_t>(sel)].empty()) {
+                return;
+            }
+            const std::string& text = placeLines_[static_cast<std::size_t>(sel)];
+            if (text != from) {
+                from = text;
+                shown = text;
+                while (!shown.empty() && p.textWidth(shown, false) > self.rect.w - 4) {
+                    do {
+                        shown.pop_back();
+                    } while (!shown.empty() && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0x80);
+                    if (!shown.empty() && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0xC0) {
+                        shown.pop_back();
+                    }
+                    if (p.textWidth(shown + "...", false) <= self.rect.w - 4) {
+                        shown += "...";
+                        break;
+                    }
+                }
+            }
+            const SDL_Point pos = self.screenPos();
+            const int tw = p.textWidth(shown, false);
+            p.text(shown, pos.x + (self.rect.w - tw) / 2, pos.y + (self.rect.h - p.fontHeight(false)) / 2, false, nox::gui::Color{240, 180, 42});
+        };
+    }
+    // The switch: "Show all" and "<the mode> only" on a dark strip, the one chosen in the gold, the
+    // other dim; a click takes the other.
+    if (gui::Window* w = screen_ ? screen_->find(kCharSwitch) : nullptr) {
+        w->draw = [this, all = showAllText(), only = onlyTargetText(charTarget_), fitted = false](gui::Window& self, gui::Painter& p) mutable {
+            const SDL_Point pos = self.screenPos();
+            const bool lit = (self.state & gui::kLit) != 0;
+            p.fillAlpha(pos.x, pos.y, self.rect.w, self.rect.h, SDL_Color{0, 0, 0, static_cast<std::uint8_t>(lit ? 200 : 160)});
+            const bool on = characterModeOnly();
+            const nox::gui::Color chosen{240, 180, 42}, other{150, 132, 100};
+            const std::string bar = "  |  ";
+            if (!fitted) {
+                // (a long mode name, a remote host's: its choice cut with "..." to the strip, once)
+                fitted = true;
+                const int room = self.rect.w - 4 - p.textWidth(all, false) - p.textWidth(bar, false);
+                while (!only.empty() && p.textWidth(only, false) > room) {
+                    do {
+                        only.pop_back(); // (a whole UTF-8 character)
+                    } while (!only.empty() && (static_cast<unsigned char>(only.back()) & 0xC0) == 0x80);
+                    if (!only.empty() && (static_cast<unsigned char>(only.back()) & 0xC0) == 0xC0) {
+                        only.pop_back();
+                    }
+                    if (p.textWidth(only + "...", false) <= room) {
+                        only += "...";
+                        break;
+                    }
+                }
+            }
+            const int wa = p.textWidth(all, false), wb = p.textWidth(bar, false), wo = p.textWidth(only, false);
+            int x = pos.x + std::max(2, (self.rect.w - (wa + wb + wo)) / 2);
+            const int y = pos.y + (self.rect.h - p.fontHeight(false)) / 2;
+            p.text(all, x, y, false, on ? other : chosen);
+            x += wa;
+            p.text(bar, x, y, false, other);
+            x += wb;
+            p.text(only, x, y, false, on ? chosen : other);
+        };
+    }
 }
 
 void Menus::fillCharacterList()
@@ -1792,7 +2082,9 @@ void Menus::fillCharacterList()
     // character, " - " Noxworld.c:Stage " %d" (its stage, 0 shown as 1).
     const SDL_Color pc = paletteColor(14);
     const nox::gui::Color color{pc.r, pc.g, pc.b, false};
-    for (const auto& c : characters_) {
+    placeLines_.assign(characters_.size(), std::string());
+    for (std::size_t i = 0; i < characters_.size(); ++i) {
+        const auto& c = characters_[i];
         const auto cls = static_cast<std::size_t>(c.info.characterClass);
         const std::string className = gui_.text(std::string("nox.str:") + kClassNames[std::min<std::size_t>(cls, 2)]);
         lists->lines.push_back({" ", color});
@@ -1802,6 +2094,14 @@ void Menus::fillCharacterList()
             const int stage = static_cast<std::int8_t>(c.info.questStage);
             line += " - " + gui_.text("Noxworld.c:Stage") + " " + std::to_string(stage == 0 ? 1 : stage);
             what = gui_.text("Noxworld.c:Quest");
+        }
+        // (noxcpp: where it was last played, in place of its kind, the game's mode's place first;
+        // every place above the lists when it's selected. No note: as the game's.)
+        if (const nox::client::character_notes::Notes* notes = i < shownNotes_.size() ? shownNotes_[i] : nullptr) {
+            if (const nox::client::character_notes::Place* place = nox::client::character_notes::shownPlace(*notes, charTarget_)) {
+                what = fitToList(placeTitle(*place), *kind);
+            }
+            placeLines_[i] = placesLine(*notes, charTarget_);
         }
         name->lines.push_back({line, color});
         kind->lines.push_back({what, color});
@@ -1821,7 +2121,7 @@ void Menus::chooseCharacter(const std::string& host)
     // (only a listed name that didn't resolve can't be joined; an unanswered server may)
     if (!host.starts_with('@')) {
         if (const auto* entry = browser_.entryFor(host); entry && entry->unresolved) {
-            browser_.setMessage("Address not found. Refresh to try again.");
+            browser_.setMessage(NOX_TR("menus.servers.address_not_found_refresh", "Address not found. Refresh to try again."));
             return;
         }
     }
@@ -1836,6 +2136,7 @@ void Menus::chooseCharacter(const std::string& host)
     pendingHost_ = host;
     solo_ = false;
     soloScreensMode_.clear();
+    targetFor(host); // (noxcpp: the characters played at its mode first: character_labels.hpp)
     // (A mode with a generated lobby: a network character, as one joining its server from the list,
     // whose lobby is a chat map with the quest only chosen.)
     // (noxcpp: a co-op campaign is listed as a quest for stock players; a NoX Core guest brings a
@@ -1928,9 +2229,28 @@ bool Menus::onSelChar(gui::Window& from)
                [this, path] {
                    std::error_code ec;
                    std::filesystem::remove(path, ec);
+                   if (!std::filesystem::exists(path, ec)) {
+                       nox::client::character_notes::remove(path); // (noxcpp: its note with it)
+                   }
                    loadCharacters();
                    fillCharacterList();
                });
+        return true;
+    }
+    case kCharSwitch: {
+        // (noxcpp) The switch: the game's mode's characters alone, or every one (kept per screen).
+        const bool on = !characterModeOnly();
+        modeOnly_[charScreen_] = on;
+        if (callbacks_.characterListModeOnly) {
+            callbacks_.characterListModeOnly(charScreen_, on);
+        }
+        arrangeCharacters();
+        fillCharacterList();
+        for (gui::Window* l : {lists, kind, name}) {
+            if (l) {
+                l->scroll = 0;
+            }
+        }
         return true;
     }
     case kCharNew:
@@ -1947,7 +2267,7 @@ bool Menus::onSelClass(int message, gui::Window& from)
     // The class screen: pointing at a portrait picks its class and shows its description; clicking
     // one does nothing more. Accept goes on to the looks.
     if (message == gui::Hover) {
-        if (from.id >= kClassFirst && from.id <= kClassLast) {
+        if (from.id >= kClassFirst && from.id <= kClassLast && classOffered(from.id - kClassFirst)) {
             pickClass(from.id);
         }
         return true;
@@ -1959,6 +2279,12 @@ bool Menus::onSelClass(int message, gui::Window& from)
         leave([this] { enter(State::SelColor); });
     }
     return true;
+}
+
+bool Menus::classOffered(int playerClass) const
+{
+    const nox::modes::CampaignInfo* campaign = soloCampaignInfo();
+    return !campaign || (playerClass >= 0 && playerClass < 3 && (campaign->classes & (1u << playerClass)));
 }
 
 void Menus::pickClass(std::int32_t id)
@@ -2212,7 +2538,9 @@ void Menus::startNewSolo()
     namespace menu = nox::client::solo_menu;
     std::u16string name;
     const nox::player::FileInfo held = madeCharacter(name);
-    const std::string map(menu::firstMap(newClass_));
+    // (noxcpp: a mod's campaign begins at its own first map, whatever the class.)
+    const nox::modes::CampaignInfo* campaign = soloCampaignInfo();
+    const std::string map = campaign ? campaign->firstMap : std::string(menu::firstMap(newClass_));
     nox::player::Music music;
     music.solo = 1;
     if (callbacks_.music) {
@@ -2231,7 +2559,7 @@ void Menus::startNewSolo()
     start.info = nox::client::solo_saves::readPlr(plr).info; // (as the section writer left it)
     start.profile = profileOf(held);
     start.characterFile = plr;
-    start.map = gameDir_ / "maps" / map / (map + ".map");
+    start.map = campaign ? campaignMapPath(gameDir_, soloCampaign(), map) : gameDir_ / "maps" / map / (map + ".map");
     showLoading(true);
     leave([this, start] { startSolo(start); });
 }
@@ -2241,8 +2569,10 @@ void Menus::characterSaveFailed(const std::filesystem::path& path, const std::st
     SDL_Log("character save failed: %s: %s", nox::pathUtf8(path).c_str(), reason.c_str());
     // Defer creation until the current button callback has returned.
     deferred_.push_back([this] {
-        dialog("Save failed",
-               "Check that your save folder is writable and has free space. See the log for details.", 0x21, {});
+        dialog(NOX_TR("menus.save_failed.title", "Save failed"),
+               NOX_TR("menus.save_failed.body",
+                      "Check that your save folder is writable and has free space. See the log for details."),
+               0x21, {});
         if (gui::Window* ok = dialog_->find(kDlgOk)) {
             ok->rect.x = (dialog_->rect.w - ok->rect.w) / 2;
         }
@@ -2275,15 +2605,20 @@ std::optional<nox::client::PlayerProfile> Menus::saveNewCharacter()
 
     // The file name: sprintf("%.6s%2.2d.plr") given the wide name, so its UTF-16 bytes up to
     // the first zero one (for most names, the first letter), then the first free number.
+    // (noxcpp: of the name as the game stores it, strings::toWire, and each byte back as the
+    // character it is there: a Russian install's "П" gives "П00.plr", as its game's does on a
+    // Russian Windows; elsewhere as before.)
     std::u16string stem;
+    const std::u16string stored = nox::strings::toWire(name);
     // The name's UTF-16 bytes, low then high, up to the first zero byte (6 at most).
-    for (std::size_t i = 0; i < name.size() * 2 && stem.size() < 6; ++i) {
-        const auto byte = static_cast<char16_t>(i % 2 == 0 ? name[i / 2] & 0xFF : name[i / 2] >> 8);
+    for (std::size_t i = 0; i < stored.size() * 2 && stem.size() < 6; ++i) {
+        const auto byte = static_cast<char16_t>(i % 2 == 0 ? stored[i / 2] & 0xFF : stored[i / 2] >> 8);
         if (byte == 0) {
             break;
         }
         stem.push_back(byte);
     }
+    nox::strings::fromWireInPlace(stem);
     std::error_code ec;
     std::filesystem::create_directories(saveDir_, ec);
     if (ec) {
@@ -2303,7 +2638,11 @@ std::optional<nox::client::PlayerProfile> Menus::saveNewCharacter()
         characterSaveFailed(saveDir_, "No free character filename (all 100 slots used)");
         return std::nullopt;
     }
-    info.savePath = path.string();
+    // (A Russian install's path as its game's 8-bit text: path.string() would need Windows' own
+    // code page to hold the Cyrillic.)
+    info.savePath = nox::strings::wireCodepage() == nox::strings::LegacyCodepage::Cp1251
+                        ? nox::strings::utf8ToWire8(reinterpret_cast<const char*>(path.u8string().c_str()))
+                        : path.string();
 
     // The client sections, as the exe writes them for a new character: the spell bars (one of
     // the class's starting sets at random, the set picker with 0, from the class screen; for a
@@ -2328,6 +2667,7 @@ std::optional<nox::client::PlayerProfile> Menus::saveNewCharacter()
     }
     SDL_Log("menus: saved %s", nox::pathUtf8(path).c_str());
     characterFile_ = path;
+    nox::client::character_notes::remove(path); // (noxcpp: a note a deleted character of this file name left)
 
     // The profile to join with, from the same looks: 5 colours (RGB each) and 5 clothing picks.
     return profileOf(info);

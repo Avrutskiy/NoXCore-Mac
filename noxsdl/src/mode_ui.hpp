@@ -123,6 +123,9 @@ public:
         (void)app;
         return false;
     }
+    /// Whether the mode's windows cover the game's own HUD pieces now (a script UI's window opened
+    /// with cover = true): those aren't drawn and take no mouse (gameHudShown).
+    virtual bool coversHud() const { return false; }
     /// Each frame once the camera's set from our own player (it may move it: a scene's view).
     virtual void cameraSet(App& app) { (void)app; }
     /// A join of `game` refused (`joinError`, net::JoinError's): what the game list says, when
@@ -173,15 +176,25 @@ std::vector<ModeUiEntry>& modeUiEntries();
 const ModeUiEntry* modeUiEntry(std::string_view modeId);
 
 /// A solo-screens mode's saves' root under the solo one (made as it's asked for: a new game's
-/// character is written under its Save\ at once); the solo root itself for any other.
-std::filesystem::path modeSaveRoot(const std::filesystem::path& soloRoot, std::string_view modeId);
-/// About to host solo-screens mode `modeId` for class `playerClass`: the app's save root the
-/// mode's (the in-game save and load menus on its saves), the solo one kept; `settings` hosting it.
-void beginSoloScreensHost(App& app, std::string_view modeId, std::uint8_t playerClass, HostSettings& settings);
-/// The game left, or its hosting failed: the solo saves' root back.
+/// character is written under its Save\ at once); the solo root itself for any other. A mod's
+/// campaign (`campaign`: its mode id) has its own: its mod folder's saves\ (registry.hpp's
+/// campaignSavesFolder), else (a read-only install) <the mode's>\Mods\<id>, said once in the log.
+std::filesystem::path modeSaveRoot(const std::filesystem::path& soloRoot, std::string_view modeId, std::string_view campaign = {});
+/// About to host solo-screens mode `modeId` for class `playerClass` (`campaign`: a mod's campaign's
+/// mode id, empty the mode's own): the app's save root the mode's (the in-game save and load menus on
+/// its saves), the solo one kept, App::campaignTitle the mod campaign's; `settings` hosting it.
+void beginSoloScreensHost(App& app, std::string_view modeId, std::uint8_t playerClass, HostSettings& settings, std::string_view campaign = {});
+/// Where mod `campaign`'s map `name` is: the one it ships (its maps\<name>\<name>.map: the index its
+/// games find maps by, Mode::maps), else the game's maps folder's.
+std::filesystem::path campaignMapPath(const std::filesystem::path& gameDir, std::string_view campaign, const std::string& name);
+/// Mod `campaign`'s campaign title (mode.json's "campaign"); empty when it's none (or `campaign` is
+/// empty: the game's own).
+std::string campaignTitleOf(std::string_view campaign);
+/// The game left, or its hosting failed: the solo saves' root back, no campaign title.
 void endSoloScreensHost(App& app);
 /// The game we host is a solo-screens mode's (a campaign mode hosted for guests, the co-op
-/// campaign): its name as the mode list shows it ("Co-op Campaign"). None: we host no such game.
+/// campaign): its name as the mode list shows it ("Co-op Campaign"), a mod's campaign's title for
+/// one (App::campaignTitle). None: we host no such game.
 /// Its host's Server Settings take only what applies to a campaign (server_options.hpp).
 std::optional<std::string> hostedCampaign(const App& app);
 /// (builtin_mode_uis.cpp, made from the built-in modes: once; again does nothing.)

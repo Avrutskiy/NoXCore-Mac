@@ -33,6 +33,7 @@ add_library(noxcore
     src/client/movies.cpp
     src/client/navigation.cpp
     src/client/sight.cpp
+    src/client/character_notes.cpp
     src/client/solo_menu.cpp
     src/client/solo_saves.cpp
     src/client/spell_bars.cpp
@@ -50,6 +51,7 @@ add_library(noxcore
     src/io/wol_login.cpp
     src/io/zip.cpp
     src/map/map_file.cpp
+    src/map/map_patch.cpp
     src/map/map_save.cpp
     src/map/objects.cpp
     src/map/sections_geometry.cpp
@@ -67,6 +69,7 @@ add_library(noxcore
     src/mapedit/mod_files.cpp
     src/mapedit/new_map.cpp
     src/mapedit/object_edit.cpp
+    src/mapedit/op_label.cpp
     src/mapedit/ops.cpp
     src/mapedit/paint.cpp
     src/mapedit/pending.cpp
@@ -93,6 +96,7 @@ add_library(noxcore
     src/lobby/xwis_login.cpp
     src/net/framing.cpp
     src/net/fx.cpp
+    src/net/game_data_proto.cpp
     src/net/messages.cpp
     src/net/player_input.cpp
     src/net/tcp_socket.cpp
@@ -129,6 +133,8 @@ add_library(noxcore
     src/server/map_send.cpp
     src/server/map_vote.cpp
     src/server/map_state.cpp
+    src/server/mode_data.cpp
+    src/server/mode_maps.cpp
     src/server/modes.cpp
     src/server/monsters.cpp
     src/server/name.cpp
@@ -166,7 +172,10 @@ add_library(noxcore
     src/server/update_writer.cpp
     src/server/world.cpp
     src/server/xfer.cpp
+    src/strings/csf_language.cpp
+    src/strings/l10n.cpp
     src/strings/string_table.cpp
+    src/things/data_files.cpp
     src/things/draw.cpp
     src/things/field_guide.cpp
     src/things/game_data.cpp

@@ -5,6 +5,8 @@
 // What the host is told: the session dialog's line before Host, the log's line once hosted.
 #pragma once
 
+#include "noxcore/strings/l10n.hpp"
+
 #include <cstdint>
 #include <string>
 
@@ -36,8 +38,9 @@ inline HostListing hostListing(bool listed, bool online, const std::string& nick
         return l;
     }
     l.where = HostListing::Where::LanOnly;
-    l.why = !online ? "XWIS is off here (--no-xwis)"
-                    : "you aren't logged in to XWIS (Online > Network), and XWIS lists a game under its host's login";
+    l.why = !online ? NOX_TR("menus.host_listing.why_no_xwis", "XWIS is off here (--no-xwis)")
+                    : NOX_TR("menus.host_listing.why_not_logged_in",
+                             "you aren't logged in to XWIS (Online > Network), and XWIS lists a game under its host's login");
     return l;
 }
 
@@ -49,15 +52,20 @@ inline std::string hostListingNote(const HostListing& l, bool* warning = nullptr
     }
     switch (l.where) {
     case HostListing::Where::Xwis:
-        return "Listed online (XWIS) as " + l.nick + "'s game, and on your LAN. Players outside your network need UDP port 18590 "
-               "forwarded to this computer (UPnP tries to map it).";
+        return nox::l10n::format(NOX_TR("menus.host_listing.note_xwis",
+                                        "Listed online (XWIS) as {nick}'s game, and on your LAN. Players outside your network need UDP "
+                                        "port 18590 forwarded to this computer (UPnP tries to map it)."),
+                                 {{"nick", l.nick}});
     case HostListing::Where::LanOnly:
-        return "Only players on your LAN will see this session: it isn't listed online because " + l.why +
-               ". To list it online, go back to the main menu, choose Online > Westwood Online and log in, then host again.";
+        return nox::l10n::format(NOX_TR("menus.host_listing.note_lan_only",
+                                        "Only players on your LAN will see this session: it isn't listed online because {why}. To list "
+                                        "it online, go back to the main menu, choose Online > Westwood Online and log in, then host "
+                                        "again."),
+                                 {{"why", l.why}});
     case HostListing::Where::Unlisted:
         break;
     }
-    return "Not listed: a local session (join it by address).";
+    return NOX_TR("menus.host_listing.note_unlisted", "Not listed: a local session (join it by address).");
 }
 
 /// The host's log line once hosted on `port` ("edit session" / "hosting" as `what`).
@@ -79,6 +87,27 @@ inline std::string hostListingLog(const HostListing& l, const std::string& what,
         line += "; port 18590 was taken, so LAN game lists (which ask on 18590) won't find it: join by address";
     }
     return line;
+}
+
+/// (Tests, recordings) A game the menus host on this computer, on the port and loopback the command
+/// line asks for: --menu-host-port (`menuHostPort`; 0: `port` as the game chose it) and --host-loopback
+/// (`hostLoopback`; off: `loopbackOnly` as it was). Every game the menus host takes them (Host, Host
+/// Quest, Host Custom's modes, Game Modes' modes and its Quest, a campaign mode, an edit session),
+/// so a test run never needs the game's port; without them a player's game is hosted as before.
+struct MenuHostSocket {
+    std::uint16_t port = 18590;
+    bool loopbackOnly = false;
+    bool operator==(const MenuHostSocket&) const = default;
+};
+inline MenuHostSocket menuHostSocket(MenuHostSocket chosen, std::uint16_t menuHostPort, bool hostLoopback)
+{
+    if (menuHostPort != 0) {
+        chosen.port = menuHostPort;
+    }
+    if (hostLoopback) {
+        chosen.loopbackOnly = true;
+    }
+    return chosen;
 }
 
 } // namespace noxsdl

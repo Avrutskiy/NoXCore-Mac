@@ -21,11 +21,13 @@
 #include "noxcore/net/update_stream.hpp"
 #include "noxcore/server/map_cycle.hpp"
 #include "noxcore/server/map_vote.hpp"
+#include "noxcore/server/mode_maps.hpp"
 #include "noxcore/server/rules.hpp"
 #include "noxcore/server/server.hpp"
 #include "noxcore/server/sound.hpp"
 #include "noxcore/server/update_writer.hpp"
 #include "noxcore/server/xfer.hpp"
+#include "noxcore/strings/string_table.hpp"
 #include "noxcore/things/game_data.hpp"
 
 #include <array>
@@ -38,11 +40,14 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace nox::server {
+
+class ModeData; // (mode_data.hpp)
 
 /// A set of extents, kept as a bit each (one past ExtentTable::kLimit in a std::set): a set's
 /// look-ups, walked upward as std::set's are.
@@ -167,13 +172,21 @@ struct HostedPlayer {
     /// (a peer, its record's address and a unit's number are all used again). Not on the wire.
     std::uint32_t joinSerial = 0;
     net::msg::ClientAccept accept;
-    std::array<std::uint8_t, 97> info{}; ///< the PlayerInfo block
-    std::string name;
+    /// the PlayerInfo block (noxcpp: its name as Unicode, GameHost::join; sent to each client as
+    /// it takes text: GameHost::textFor)
+    std::array<std::uint8_t, 97> info{};
+    std::string name;        ///< its name, UTF-8 (the console's, logs', bans')
+    std::u16string wideName; ///< the same, UTF-16 (the ban list's key, a kick vote's)
     bool ready = false;            ///< sent CLIENT_READY
     /// Sent INCOMING_CLIENT (its bit in g_playersInGameMask, kept through map changes): important
     /// messages to everyone wait for its CLIENT_READY (frees a node only once each
     /// in-game player has it).
     bool joined = false;
+    /// (noxcpp) Sent watching by a download (it was in play, and the download's Plr_GoObserver
+    /// made it an observer: its map request, MSG_REQUEST_MAP, or its ask for a mod's game data,
+    /// MSG_NOXCPP_GAMEDATA's kWant) and not ready since: what a mode may put right at that
+    /// CLIENT_READY (GameHost::watchingForDownload). Its next ready ends it.
+    bool watchingForDownload = false;
     std::uint32_t heardAt = 0;     ///< (Player's: the frame of its last packet, SrvNet_OnPacket)
     std::uint8_t slot = 0;        ///< its bit in objects' syncMask (0-31)
     float viewHalfWidth = 320;     ///< half its screen (CLIENT_ACCEPT's size / 2: Player view)
@@ -211,6 +224,14 @@ struct HostedPlayer {
         std::uint32_t since = 0; ///< the frame it began, or the tell queued (a stop: kSecondaryTellFrames)
     };
     SecondaryTell secondaryTell;
+};
+
+/// A map the host won't load: its script uses memory tricks of the original game that NoX Core
+/// does not run (script::memoryTrickBuiltin). what() is script::memoryTricksNotice's text.
+struct MapRefused : std::runtime_error {
+    MapRefused(std::string mapName, std::uint32_t id);
+    std::string map;          ///< the map's name (its file's, less ".map")
+    std::uint32_t builtin = 0; ///< the builtin id that gave it away
 };
 
 // The hosted game. The owner feeds it datagrams (receive) and the time (tick) and sends what
@@ -361,6 +382,26 @@ public:
         /// names are found in (empty: the hosted map's folder's).
         std::filesystem::path mapCycle;
         std::filesystem::path mapsDir;
+        /// (noxcpp: a NoX Core mode's) The maps its mode ships (a mod's maps\ folder, indexed once
+        /// when the mod was read: mode_maps.hpp), found by name before the maps folder's in every
+        /// lookup of this game (findMap). Null, as every game but such a mode's: the maps folder alone.
+        std::shared_ptr<const ModeMaps> modeMaps;
+        /// (noxcpp: with modeMaps) Where its maps' saved rules go, each map's in a folder of its
+        /// name under it (ruleFoldersOf): the mod's saved data's (a script mode's configure sets
+        /// <ServerContext::modData>\<id>\maps.rules). Empty: its maps' rules are only read (those
+        /// shipped beside them), never written.
+        std::filesystem::path modeRulesDir;
+        /// (noxcpp: a NoX Core mode's) Its own game data files (a mod's data\: mode_data.hpp). Its
+        /// host reads this game's tables from them (the things this host is made with, and
+        /// gameData, modifiers, monsterDb, soundSets above); the host sends each NoX Core client
+        /// those of them a client reads (thing.bin, modifier.bin, gamedata.bin) before its first
+        /// map, MSG_NOXCPP_GAMEDATA (net/game_data_proto.hpp), and the files it asks for. Null, as
+        /// every game but such a mode's: nothing sent, nothing kept.
+        std::shared_ptr<const ModeData> modeData;
+        /// (With modeData's overrides) the merged tables' checks the host's own merge gave
+        /// (things::DataTables::merged, by DataFile Things ... SoundSets): each client's merge must
+        /// give the same, else it leaves (its install's file isn't the host's).
+        std::array<std::uint32_t, 5> modeDataMerged{};
         /// The game's folder, where execrul finds its .rul files (OTQuest.rul); empty: the maps
         /// folder's parent, as it is in every game but the map editor's quest play-test (whose
         /// maps folder is its own).
@@ -472,9 +513,28 @@ public:
     /// (ServerTransport::latency); the host's own (player 0x1F's) is the latency compensation's:
     /// 0 none, 1 the least of the others' over 0, 2 their average, 3 the amount set. 0 for no player.
     int latencyOf(std::uint8_t peer) const;
+    /// (noxcpp) Whether the player on `peer` is watching only because a download sent it so (its
+    /// map, or a mod's game data: HostedPlayer::watchingForDownload): asked by a mode at the
+    /// CLIENT_READY that follows (Options::onClientReady), false once the ready is over. A player
+    /// that went watching any other way (its own request, an idle client's, a mode's hold) is never
+    /// this.
+    bool watchingForDownload(std::uint8_t peer);
     const Options& options() const noexcept { return options_; }
     /// Where the game's maps are (Options::mapsDir; none: the map's folder's parent).
     std::filesystem::path mapsDir() const;
+    /// (noxcpp) The .map file the map `name` (a folder's name, no extension) is for this game: its
+    /// mode's own (Options::modeMaps) when it ships one of that name, else
+    /// <mapsDir>\<name>\<name>.map as it always was (whether or not it's there). Every load, list,
+    /// cycle, vote, download and CRC of the game finds its maps through this.
+    std::filesystem::path findMap(std::string_view name) const;
+    /// The same before a host is made (a mode's configure naming its first map): `o.mapsDir` as
+    /// given.
+    static std::filesystem::path findMap(const Options& o, std::string_view name);
+    /// (noxcpp) Where the map `name`'s rule files (.rul) are read, written and deleted for this game
+    /// (rules.hpp's RuleFolders): its mode's own map's (Options::modeMaps) are kept in
+    /// Options::modeRulesDir\<name>\ and read there first, then beside the map in its mod's folder;
+    /// every other map's are <mapsDir>\<name, 8 letters>\ as they always were.
+    RuleFolders ruleFoldersOf(const std::string& name) const;
     /// The game as XWIS lists it (the WOL record GAME.EXE posts: lobby::makeWolRecord): the name,
     /// the map, the mode, the players and their limit, the quest's stage, the Access settings
     /// (closed, password, the classes refused, the ping limits). The port is the caller's.
@@ -488,6 +548,9 @@ public:
         std::uint32_t modes = 0;
         int minPlayers = 2;
         int maxPlayers = 16;
+        /// Its script uses memory tricks of the original game (the builtin that gave it away): never
+        /// listed, voted on or cycled to (MapRefused).
+        std::optional<std::uint32_t> memoryTricks;
     };
     /// What the window edits: the game's name, the mode chosen, the map and that mode's limits.
     struct ServerSettings {
@@ -536,6 +599,9 @@ public:
     /// The client level an identified client named (lobby::kClientLevel: a feature keyed "level N
     /// or above" goes only to one at N or above); 0 for any other.
     std::uint16_t clientLevel(std::uint8_t peer) const { return transport_.clientLevel(peer); }
+    /// The UI language an identified client named (its query's: "en", "ru", "ko"...; client level
+    /// 14); empty for any other.
+    const std::string& clientLanguage(std::uint8_t peer) const { return transport_.clientLanguage(peer); }
     /// (Options::clientKeyRealm) The key `peer`'s client proved for this host's realm: 32 hex
     /// digits, the same for that PC every time; empty for any other.
     const std::string& clientKey(std::uint8_t peer) const { return transport_.clientKey(peer); }
@@ -1115,6 +1181,14 @@ private:
     /// g_playersInGameMask), so a player in but not ready gets it at its CLIENT_READY; one not in
     /// yet (no INCOMING_CLIENT) doesn't.
     void sendImportantToAll(std::span<const std::uint8_t> bytes, bool onlyJoined = false, std::optional<std::uint8_t> except = std::nullopt);
+    /// noxcpp: whether `peer` takes the game's text as real Unicode (a NoX Core client of
+    /// lobby::kUnicodeTextLevel); the rest get it in the host's convention (strings::wireText).
+    bool unicodePeer(std::uint8_t peer) const;
+    /// The convention text from `peer` comes in (and goes to it in): Unicode's (plain) or the host's.
+    strings::LegacyText peerText(std::uint8_t peer) const;
+    /// A message as `peer` takes it (World::textForStock): its text in the host's convention for a
+    /// stock client of a host whose convention isn't Latin-1; nullopt: as it is.
+    std::optional<std::vector<std::uint8_t>> textFor(std::uint8_t peer, std::span<const std::uint8_t> m) const;
     /// A player's CLIENT_READY: what waited for it goes first (the important queue's oldest first).
     void releasePending(HostedPlayer& p);
     /// GAME.EXE's player 0x1F (the host's own: setHostPeer's, or a solo game's).
@@ -1246,6 +1320,10 @@ private:
     int mapSendsInProgress_ = 0;                   ///< (g_mapSendsInProgress)
     std::uint32_t mapSendsStarted_ = 0;            ///< (g_mapSendsStarted: the unacknowledged count's "stream" for sender 30)
     void onRequestMap(std::uint8_t peer);  ///< SrvNet_OnRequestMap
+    /// A download asked for (the map's, a mod's game data): the player observing, free to join,
+    /// and out of its team (the map request's Plr_GoObserver(.., 1, 1) and Team_RemoveMember); one
+    /// that was in play marked HostedPlayer::watchingForDownload.
+    void watchForDownload(std::uint8_t peer);
     void onCancelMap(std::uint8_t peer);   ///< SrvNet_OnCancelMap
     void onReceivedMap(std::uint8_t peer); ///< SrvNet_OnReceivedMap
     /// A slot forgotten (SrvNet_OnReceivedMap's, Plr_OnDisconnect's): every object owed to player slot
@@ -1264,9 +1342,31 @@ private:
     std::map<std::uint8_t, std::uint8_t> fastMapRequests_; ///< by peer: fast sends since the map's load
     /// A fast sender's frame: up to `budget` blocks (the frame's share left, taken from it).
     void mapSendFast(std::uint8_t peer, MapSender& s, int& budget);
+
+    // noxcpp: a mode's own game data (Options::modeData, net/game_data_proto.hpp): the files a
+    // client asked for (kWant), sent a chunk at a time while its reliable queue has room. None
+    // kept in any game without the data.
+    struct DataSender {
+        std::vector<std::uint8_t> kinds; ///< (things::DataFile) the files still to go, in order
+        std::uint32_t offset = 0;        ///< in the first of them
+    };
+    std::map<std::uint8_t, DataSender> dataSenders_; ///< by peer
+    /// The join's kSet to an identified `peer` (before its USE_MAP), when the game has client files.
+    void sendDataSet(std::uint8_t peer);
+    void onNoxcppGameData(std::uint8_t peer, std::span<const std::uint8_t> m); ///< a client's kWant
+    /// The senders' chunks, each while its peer's queue has room (tick's).
+    void dataSendFrame();
     void mapSendNextBlock(std::uint8_t peer, MapSender& s); ///< SrvNet_MapSendNextBlock
     void mapSendAbortAll(std::uint8_t reason); ///< (SrvNet_MapSendAbort each)
     bool mapSendLoadMap();                 ///< SrvNet_MapSendLoadMap
+    /// (noxcpp) The .nxz a download of the map `stem` sends: <mapsDir>\<stem>\<stem>.nxz, or the
+    /// one its mode ships beside its own map (none: empty).
+    std::filesystem::path mapSendFile(const std::string& stem) const;
+    /// (noxcpp) A solo game with guests (Options::soloGuests) loads nothing for downloads as its
+    /// maps load, as the exe's solo game doesn't: a guest's request reads the map's .nxz then, or
+    /// makes it from the .map when none is shipped (the campaign's maps have none). Whether there's
+    /// a map to send.
+    bool mapSendLoadForGuests();
     /// A mapsend.c line (Str_GetString(label), its %s / %S / %d filled in order) to the console.
     void mapSendPrint(std::string_view label, std::initializer_list<std::string_view> values = {});
     /// A quest's saved players (quest.hpp's questMapStart, the player update's game over): the
