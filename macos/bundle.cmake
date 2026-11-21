@@ -7,6 +7,11 @@ file(MAKE_DIRECTORY "${BUNDLE}/Contents/MacOS" "${BUNDLE}/Contents/Resources")
 file(COPY_FILE "${EXECUTABLE}" "${BUNDLE}/Contents/MacOS/noxcore" ONLY_IF_DIFFERENT)
 file(COPY_FILE "${PLIST}" "${BUNDLE}/Contents/Info.plist" ONLY_IF_DIFFERENT)
 file(COPY "${SOURCE}/mods" DESTINATION "${BUNDLE}/Contents/Resources")
+if(MODS_LIBRARY)
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E copy_directory
+        "${MODS_LIBRARY}/mods" "${BUNDLE}/Contents/Resources/mods" COMMAND_ERROR_IS_FATAL ANY)
+endif()
+file(COPY "${SOURCE}/noxsdl/res/lang" DESTINATION "${BUNDLE}/Contents/Resources")
 # SDL_GetBasePath resolves to Resources in an app bundle. Upstream loads its
 # original-style TrueType faces from the fonts directory below that path.
 file(COPY "${SOURCE}/noxsdl/res/fonts" DESTINATION "${BUNDLE}/Contents/Resources")
