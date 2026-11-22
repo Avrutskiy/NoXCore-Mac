@@ -279,6 +279,11 @@ struct PlayerControl {
     /// goObserver tells it nothing and leaves the camera be. Off as it leaves watching
     /// (leaveObserver), by nox.camera(unit, nil) and at the mode's end; never sent.
     bool modCamera = false;
+    /// (noxcpp: a script mode's, nox.camera on a player in play) It watches a thing for the mode
+    /// (status 2, as a creature's watcher: playerObserveMonster): the mode's abilities still heard
+    /// from it. Off as that watch ends by any path (observeClear, a new watch) and at the mode's end;
+    /// never sent. A map change ends such a watch (mapChangePlayer); a player's own goes on.
+    bool modWatch = false;
     float camX = 0;
     float camY = 0;
     ObjectRef cameraFollow;
@@ -534,6 +539,9 @@ struct ServerObject {
     /// or told to World::modeHooks for it alone. 0: none, as every object of the game's. (In the
     /// padding before `value`: the object's size is the same.)
     std::uint8_t modeEvents = 0;
+    /// noxcpp: what a mode set on it (ModeMark: nox.setDroppable). 0: nothing, as every object of
+    /// the game's. (In the same padding.)
+    std::uint8_t modeMarks = 0;
     int value = 0;           ///< its own number (a fist's or meteor's damage, a cloud's time)
     // Poison (its level; frames to its next fall, and a slowed one's; the
     // frame it began).
@@ -877,6 +885,10 @@ struct ServerObject {
         };
         std::optional<SavedRefs> savedRefs;
         const things::MonsterDef* def = nullptr;
+        /// noxcpp (a mode's: nox.setCreatureProfile): a record of its own that `def` points at, in
+        /// place of its type's monster.bin record; null: none, as every creature of the game's. Not
+        /// kept in a saved map (its type's record again, as a load makes it).
+        std::shared_ptr<const things::MonsterDef> ownDef;
         std::uint32_t status = 0;                ///< StatusFlags (MonsterStatus; 0x200 hurt)
         float aggression = 0.5f;
         float aggression2 = 0.5f;
@@ -2168,6 +2180,20 @@ public:
     bool setNumber(std::string_view name, std::size_t index, float value);
     /// Whether this world reads its own copy of the numbers (setNumber was used).
     bool ownNumbers() const noexcept { return ownGameData_ != nullptr; }
+    /// noxcpp: a mode's own WORTH for a thing type in this world alone (nox.setWorth): what a shop's
+    /// prices, a repair's cost and a quest's sale read for its things in place of thing.bin's
+    /// (typeWorth); nullopt gives thing.bin's back. Nothing is sent: prices are the server's. The
+    /// install's thing.bin is never changed, and the next map's world reads it again.
+    void setWorth(std::string_view type, std::optional<std::uint32_t> worth);
+    /// The mode's worth of a type in this world (setWorth), if it set one.
+    std::optional<std::uint32_t> ownWorth(std::string_view type) const;
+    /// noxcpp: the item types a player keeps in this world alone (nox.setKeptItems): it can't drop
+    /// or sell them, and a full inventory doesn't drop them (questItem and keptFromDrop:
+    /// ItemIsDroppable's list); nullopt gives the game's own list back. The next map's world has the
+    /// game's list again.
+    void setKeptItems(std::optional<std::vector<std::string>> types);
+    /// The mode's kept types in this world (null: the game's own list).
+    const std::vector<std::string>* keptItems() const noexcept { return keptItems_.get(); }
     bool solo() const noexcept { return (gameFlags & (GameFlag::Solo | GameFlag::SoloOther)) != 0; }
     bool quest() const noexcept { return (gameFlags & GameFlag::Quest) != 0; }
     bool network() const noexcept { return (gameFlags & GameFlag::Network) != 0; }
@@ -2416,6 +2442,23 @@ public:
     std::uint8_t wallHealth(int material) const;
     std::uint8_t wallVariations(int material) const;
     int wallMaterial(std::string_view name) const;
+    /// (noxcpp: a mode's, nox.setWallDebris) The things a WALL material's breakable walls throw when
+    /// hit or broken, for this map alone (its world's): `names` in place of thing.bin's list (empty:
+    /// none), nullopt thing.bin's again. With none set the walls read thing.bin's, as ever.
+    void setWallDebris(int material, std::optional<std::vector<std::string>> names);
+    /// What a material's walls throw: setWallDebris's, else `own` (its thing.bin's list).
+    const std::vector<std::string>& wallDebris(int material, const std::vector<std::string>& own) const
+    {
+        if (wallDebris_.empty()) {
+            return own;
+        }
+        for (const auto& [m, names] : wallDebris_) {
+            if (m == material) {
+                return names;
+            }
+        }
+        return own;
+    }
     /// The Wall spell's walls, and what their end owes the players they were sent to (the bytes
     /// to send, by player slot).
     std::vector<MagicWall>& magicWalls() noexcept { return magicWalls_; }
@@ -2617,12 +2660,17 @@ private:
     mutable TypeCache typeCache_;
     /// setNumber's copy of the numbers (null: gameData is the install's).
     std::unique_ptr<things::GameData> ownGameData_;
+    /// setWorth's worths by type name (null: none set, thing.bin's read).
+    std::unique_ptr<std::map<std::string, std::uint32_t, std::less<>>> ownWorths_;
+    /// setKeptItems' list (null: the game's own).
+    std::unique_ptr<std::vector<std::string>> keptItems_;
     MapGrid grid_;
     std::vector<std::uint32_t> fresh_; ///< the new list (noteNew), oldest first
     WallMap walls_;
     std::uint32_t nextWallSerial_ = 0; ///< WallCell::serial's next
     std::vector<std::pair<int, int>> secretWalls_;
     std::vector<std::pair<int, int>> breakableWalls_;
+    std::vector<std::pair<int, std::vector<std::string>>> wallDebris_; ///< setWallDebris's, by material
     std::vector<std::uint32_t> wallDefFlags_; ///< WALL flags by material
     std::vector<std::uint8_t> wallDefHealth_;
     std::vector<std::uint8_t> wallDefVariations_;

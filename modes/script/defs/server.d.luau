@@ -127,8 +127,8 @@ declare nox: {
     unitsNear: (x: number, y: number, radius: number, filter: NoxUnitFilter?) -> { number },
     --- How many units unitsNear would list (no list made).
     countNear: (x: number, y: number, radius: number, filter: NoxUnitFilter?) -> number,
-    --- A point effect every client draws (a MSG_FX_* message that carries only x and y).
-    effect: (op: number, x: number, y: number) -> (),
+    --- An effect every client draws: op a MSG_FX_* message of a point (x, y), of two points (x, y, x2, y2: lightning, rays) or the green bolt (0x98: x, y, x2, y2, its frames); or a quest effect by name: "GENERATOR_BREAK" (x, y, size 0-255, 200 a generator's), "GENERATOR_HURT" (x, y), "GREEN_ZAP" (x, y, x2, y2, frames).
+    effect: (op: number | string, x: number, y: number, x2: number?, y2: number?, frames: number?) -> (),
     --- A spell's sound's name (which: 0 its cast, 1 on, 2 off) for nox.sound; nil when none.
     spellSound: (spell: string | number, which: number?) -> string?,
     --- Makes a thing of a type (name or number) at (x, y), owned by maker if given, an item with a spec's modifiers; its id, nil for no such type.
@@ -145,6 +145,28 @@ declare nox: {
     touch: (id: number) -> (),
     --- A creature's sight range; given a range, sets it instead.
     sightRange: (id: number, range: number?) -> number,
+    --- A creature reads `profile` as its monster.bin record in place of its type's (nil: its type's again): monster.bin's keys with their values, a whole record (a key left out is 0 or none, as in the file), `name` its name; STATUS a number of bits or '+' names, MELEE_ATTACK_DAMAGE_TYPE a number or name, a missile or function "" for none. Its AI's retreat and resume levels, status flags and flee range are taken from it as for one made with it, unless keepAi; its health, experience and speed stay. Not kept in a saved map.
+    setCreatureProfile: (id: number, profile: { [string]: number | string | boolean }?, keepAi: boolean?) -> (),
+    --- The monster.bin record a creature reads (its own, else its type's) as nox.setCreatureProfile takes one; nil when it has none.
+    creatureProfile: (id: number) -> { [string]: number | string }?,
+    --- A creature's or player's base speed and this frame's.
+    speed: (id: number) -> (number, number),
+    --- A creature's or player's base speed (0-100: what each frame's is worked out from), and this frame's when given.
+    setSpeed: (id: number, base: number, current: number?) -> (),
+    --- A thing's mass (how hard it is to push), above 0.
+    setMass: (id: number, mass: number) -> (),
+    --- Whether a creature is immune to "poison", "fire" or "electricity" (its SUBCLASS's IMMUNE_*); given on, sets it so first.
+    immune: (id: number, kind: "poison" | "fire" | "electricity", on: boolean?) -> boolean,
+    --- The sound set (soundset.bin's, by name) a creature's cries come from; nil: its type's again.
+    setSoundSet: (id: number, name: string?) -> (),
+    --- An NPC's (subclass NPC or FEMALE_NPC) six colours, each { r, g, b } 0-255 (nil: kept); the players who know it told.
+    setNpcColors: (id: number, colors: { { number } }) -> (),
+    --- A creature's AI told to cast a spell (its number 0-136, or name) at a point on the map (0-5888), as its own CAST_SPELL_ON_LOCATION; whether it was pushed.
+    creatureCast: (id: number, spell: string | number, x: number, y: number) -> boolean,
+    --- A creature's spellbook and casting rhythm (each field left out kept): spells[name or number] = its ways ("reaction", "defensive", "disabling", "offensive", "escape"; one, a list, or false: not cast); delays[way] = { least, most } frames; power 0-5; aim 0-1.
+    setCaster: (id: number, caster: { spells: { [string | number]: string | { string } | boolean }?, delays: { [string]: { number } }?, power: number?, aim: number? }) -> (),
+    --- false: a creature or a player holding the item can't let it go (every drop of it by one fails: by hand, a Fumble, the holder's death); a chest, or a thrown chakram in flight, lets it out as any item; true or nil: as the game has it.
+    setDroppable: (id: number, droppable: boolean?) -> (),
     --- The ids of the live enemy creatures a unit sees within range, nearest first, at most `most`.
     nearestFoes: (unit: number, range: number, most: number, losTested: number) -> { number },
     --- Pushes a thing away from (fromX, fromY) as the engine does; a negative force pulls.
@@ -201,6 +223,16 @@ declare nox: {
     setTeam: (id: number, team: number) -> (),
     --- Sets or clears a thing's NO_COLLIDE flag: nothing touches it, it pushes nothing.
     setNoCollide: (id: number, on: boolean?) -> (),
+    --- A thing's object flags as the engine has them (0x10 SHORT, 0x40 NO_COLLIDE, 0x2000 NO_PUSH_CHARACTERS, 0x4000 AIRBORNE, 0x8000 DEAD, 0x1000000 ENABLED...), read only.
+    flags: (id: number) -> number,
+    --- Sets (on or nil) or clears flags among 0x10 SHORT (missiles and flyers pass over it), 0x40 NO_COLLIDE, 0x2000 NO_PUSH_CHARACTERS (creatures don't push it) and 0x8000 DEAD (not a creature's or a player's: a chest with it stays shut), as fields; nothing sent.
+    setFlag: (id: number, flags: number, on: boolean?) -> (),
+    --- A creature's status bits as it plays (monster.bin's STATUS and the AI's own: 0x4000 running...); given bits among the run ones (0x2000 CAN_RUN, 0x4000 RUNNING, 0x8000 ALWAYS_RUN, 0x10000 NEVER_RUN), sets (on or nil) or clears them first; the bits after.
+    monsterStatus: (id: number, bits: number?, on: boolean?) -> number,
+    --- Where a player's cursor is in the world, as its client last told the server (what aims its swings and spells).
+    cursor: (unit: number) -> (number, number),
+    --- What a wall type's (thing.bin's WALL name) breakable walls throw when hit or broken, for this map alone: up to 8 thing types in place of thing.bin's ({} none); nil, thing.bin's again. Each map loads with thing.bin's.
+    setWallDebris: (wallType: string, names: { string }?) -> (),
     --- A missile's hit shape: a point made a circle of 1-32, a circle's radius up to 4x its type's (its owner spared by the growth until it's clear; only nil gives the stock hit back).
     setHitRadius: (id: number, radius: number?) -> (),
     --- A missile's burst reach and push reach times 0.5-3, read as it bursts (nil: 1).
@@ -237,13 +269,13 @@ declare nox: {
     present: (id: number?, thingType: number?) -> boolean,
     --- Whether a thing is present, not flagged dead, and has some health.
     living: (id: number?) -> boolean,
-    --- Sets a thing's collide by name: "DefaultCollide" or "ModeCollide".
-    setCollide: (id: number, name: string) -> (),
+    --- Sets a thing's collide by name: "DefaultCollide" or "ModeCollide"; nil gives it its type's own back (thing.bin's, with the data it was made with).
+    setCollide: (id: number, name: string?) -> (),
     --- Brings a watching (observing, not dead) player's unit back into play as the quest does.
     backIntoPlay: (unit: number) -> (),
     --- on: puts a player out of play watching (unseen, out of reach), held out (its Action never brings it in), its camera the mode's (nox.camera; where it is till then) and no "observation mode" told; off: back into play as nox.backIntoPlay brings it, the hold let go (as it is when anything else brings it into play: a later watch is a free one).
     observe: (unit: number, on: boolean) -> (),
-    --- Holds a watching player's camera (the view it's sent and where it hears from) at (x, y), or on a thing (thingOrX alone: following it while it's in the world), so its own controls no longer move it; nil lets it go (the stock observer's controls again).
+    --- Holds a watching player's camera (the view it's sent and where it hears from) at (x, y), or on a thing (thingOrX alone: following it while it's in the world), so its own controls no longer move it; nil lets it go (the stock observer's controls again). A player in play (alive, not watching) watches a thing as a creature's watcher does (status 2: its camera on it, it stands where it is; its own Move, Action or Jump or a hit bring it back, and so does a map change), the mode's abilities still heard from it; nil brings it back.
     camera: (unit: number, thingOrX: number?, y: number?) -> (),
     --- The spot beside a soul gate where its fallen come back.
     nearSoulGate: (gate: number) -> (number, number),
@@ -286,7 +318,7 @@ declare nox: {
     setAbility: (unit: number, ability: number, level: number, report: boolean?, show: boolean?) -> (),
     --- Puts a spell ("spell": its name or number) or an ability ("ability": 1-5) the player knows on its client's spell bars quietly: the first empty slot, only where no slot holds it (nothing moved or doubled), no book, sound, sparks or line. Sent once the player is in play and every revoke owed to it (nox.revoke) has gone. Whether it will be sent (false: not known, or a client below client level 10 or without the mode UI: nothing sent).
     putOnBars: (unit: number, kind: "spell" | "ability", what: string | number) -> boolean,
-    --- A line about the player's character ("level 12, act 3"), which its NoX Core client keeps beside the character it joined with and shows next to it on its character screens. Plain text, cut to 80 bytes, control characters dropped; "" takes it away; the same line again is sent once. Whether it was sent (false: a stock client, one below client level 15 or without the mode UI: nothing sent).
+    --- A line about the player's character ("level 12, act 3"), which its NoX Core client keeps with the character it joined with (in its .plr) and shows next to it on its character screens. Plain text, cut to 80 bytes, control characters dropped; "" takes it away; the same line again is sent once. Whether it was sent (false: a stock client, one below client level 15 or without the mode UI: nothing sent).
     characterNote: (unit: number, text: string) -> boolean,
     --- A player's field guide: for each creature 1-40, whether it has it.
     fieldGuide: (unit: number) -> { boolean },
@@ -400,11 +432,11 @@ declare nox: {
     itemStats: (thingType: string | number) -> NoxItemStats?,
     --- Every modifier's name in a section ("effectiveness", "material" or "enchantment"), in modifier.bin's order.
     modifiers: (section: string) -> { string },
-    --- Whether a modifier fits a slot ("effectiveness", "material", "primary", "secondary") of an item type.
+    --- Whether a modifier fits a slot ("effectiveness", "material", "primary", "secondary") of an item type: the game's reward-table rule, and the grade below its rows its own drops give (WeaponPower1, ArmorQuality1, Material1-2) where their lists allow it (never on a bow, a crossbow or a wand staff for a power or material).
     modifierFits: (thingType: string, slot: string, name: string) -> boolean,
-    --- Puts on an item the player's unit carries; true, or false and why.
+    --- Puts on an item the player's unit (or a creature) carries; true, or false and why.
     equip: (unit: number, item: number) -> (boolean, string?),
-    --- Takes off an item the player's unit wears; whether it came off.
+    --- Takes off an item the player's unit (or a creature) wears; whether it came off.
     unequip: (unit: number, item: number) -> boolean,
     --- The item the player's client holds as its secondary weapon; nil for none, one no longer carried or one in hand now.
     secondaryWeapon: (unit: number) -> number?,
@@ -414,6 +446,14 @@ declare nox: {
     repair: (item: number) -> boolean,
     --- Sets an item's durability, 1 to its most (more is its most), its holder's client told; false for a thing without durability.
     setDurability: (item: number, durability: number) -> boolean,
+    --- Sets an existing item's modifiers by slot (a name, false for none; a slot left out stays), the clients that know it told; an arrow or bolt in flight takes any (its hits read them). true, or false and why (a thing that takes none, one worn, a set that doesn't fit: nox.modifierFits).
+    setItemSpec: (item: number, spec: { effectiveness: (string | boolean)?, material: (string | boolean)?, primary: (string | boolean)?, secondary: (string | boolean)? }) -> (boolean, string?),
+    --- A thing type's (name or number) worth for this map's world (shop prices, repair costs, a quest's sale) in place of thing.bin's; nil gives thing.bin's back. Nothing is sent.
+    setWorth: (thingType: string | number, worth: number?) -> (),
+    --- The item types (at most 64) a player can't drop or sell in this map's world in place of the game's own list (the quest items: BookOfOblivion, the Oblivion staffs, the keys...; its two Lich orb keys can be dropped, never sold); nil gives the game's back.
+    setKeptItems: (types: { string | number }?) -> (),
+    --- Sets a thing's pickup by name: "DefaultPickup", "WeaponPickup" or "ArmorPickup" (an Oblivion staff's without its own line, OblivionUp and wear); nil gives it its type's own back.
+    setPickup: (id: number, name: string?) -> (),
     --- # Player levels
     --- Sets a player's level (1-10), its numbers worked out again.
     setLevel: (unit: number, level: number) -> (),
@@ -495,6 +535,7 @@ declare function require(name: string): any
 --- @hook onDestroyed(e) | A watched thing was destroyed ({ id, type, x, y }).
 --- @hook onDamage(target, source, weapon, amount, kind, cause) | Before a watched thing takes a hit (cause: "blow", "missile", "spell" or "other"): return a new amount (0 cancels) or nil, and optionally a second number, the amount its worn armour, raised shield or blocking weapon wear by instead (the hit before the mode's own scaling; nil: by the hit as it lands); changes nothing in the world.
 --- @hook onReflect(target, missile, front) | A missile about to hit a watched thing (front: met at its front): return true to turn it as a reflective shield does (back, the target's now) instead of the hit; changes nothing in the world.
+--- @hook onStrike(weapon, victim, attacker, modifiers) | A weapon strikes (weapon: the swung one, a thrown chakram, a shot arrow or bolt; attacker nil: none), at the moment its enchantments' pre-hit effects would run (past their checks: not a friend in a game without friendly hits, not one invulnerable or behind a reflective shield), before them and the blow's own damage, at once: the world may change (nox.damage, nox.effect, nox.sound...). modifiers: the weapon's by slot ({ effectiveness, material, primary, secondary }, names; a slot without one left out).
 --- @hook onDamaged(target, amount) | A watched thing took a hit.
 --- @hook onPickup(taker, item, x, y) | Something picked an item up from (x, y).
 --- @hook onDrop(holder, item) | A holder dropped a watched item.

@@ -907,7 +907,7 @@ float coordArg(lua_State* L, int idx)
 {
     const double v = luaL_checknumber(L, idx);
     luaL_argcheck(L, v >= 0 && v <= kMapExtent, idx, "a point on the map (0 to 5888)");
-    return static_cast<float>(v);
+    return toolbox::toFloat(v);
 }
 
 /// A unit's peer (its player's), none for a unit without one (a test's, a bot's own).
@@ -1574,7 +1574,7 @@ int noxCreate(lua_State* L)
 int noxFloorAt(lua_State* L)
 {
     // The floor tile (a FLOR index) at a point; -1 none.
-    lua_pushinteger(L, worldOf(L).floorAt(static_cast<float>(luaL_checknumber(L, 1)), static_cast<float>(luaL_checknumber(L, 2))));
+    lua_pushinteger(L, worldOf(L).floorAt(toolbox::toFloat(luaL_checknumber(L, 1)), toolbox::toFloat(luaL_checknumber(L, 2))));
     return 1;
 }
 
@@ -1587,15 +1587,15 @@ int noxWallAt(lua_State* L)
 
 int noxCosf(lua_State* L)
 {
-    // cos of the value as a float, the float result (the C++'s std::cos(float), in the thread's
-    // rounding: the server's).
-    lua_pushnumber(L, std::cos(static_cast<float>(luaL_checknumber(L, 1))));
+    // cos of the value as a float (the nearest, toolbox::toFloat), the float result (the C++'s
+    // std::cos(float), in the thread's rounding: the server's).
+    lua_pushnumber(L, std::cos(toolbox::toFloat(luaL_checknumber(L, 1))));
     return 1;
 }
 
 int noxSinf(lua_State* L)
 {
-    lua_pushnumber(L, std::sin(static_cast<float>(luaL_checknumber(L, 1))));
+    lua_pushnumber(L, std::sin(toolbox::toFloat(luaL_checknumber(L, 1))));
     return 1;
 }
 
@@ -1704,8 +1704,15 @@ int noxSetCollide(lua_State* L)
 {
     // A thing's COLLIDE set by name: "DefaultCollide" (its touches do nothing: a soul gate's look
     // alone, no checkpoint) or "ModeCollide" (the mode's: nox.watchCollide). No other: the
-    // game's own need the data their things are made with.
+    // game's own need the data their things are made with. nil: its type's own back (thing.bin's
+    // last COLLIDE line's function; its data is the one the thing was made with, never changed here).
     server::ServerObject& o = objectArg(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        const things::ThingDef* def = toolbox::thingsOf(L).findThing(o.typeName);
+        const std::string_view line = def ? def->lastAttribute("COLLIDE").value_or("") : std::string_view{};
+        o.collideFn = server::Name(line.substr(0, line.find(' ')));
+        return 0;
+    }
     const std::string_view name = luaL_checkstring(L, 2);
     luaL_argcheck(L, name == "DefaultCollide" || name == "ModeCollide", 2, "DefaultCollide or ModeCollide");
     o.collideFn = server::Name(name);
@@ -2115,15 +2122,73 @@ int noxTell(lua_State* L)
     return 0;
 }
 
+int wholeArg(lua_State* L, int idx, double lo, double hi, const char* what);
+
+/// u16 little-endian onto a message.
+void putU16(std::vector<std::uint8_t>& m, int v)
+{
+    m.push_back(static_cast<std::uint8_t>(v));
+    m.push_back(static_cast<std::uint8_t>(v >> 8));
+}
+
+/// A point as the game's effects send one: each coordinate cut to an int, its low 16 bits.
+void putPoint(std::vector<std::uint8_t>& m, float x, float y)
+{
+    putU16(m, static_cast<int>(x));
+    putU16(m, static_cast<int>(y));
+}
+
 int noxEffect(lua_State* L)
 {
-    // A point effect every client draws: one of the game's MSG_FX_* that is just a point
-    // ({op, u16 x, u16 y}), never another message (a client would frame what follows wrongly).
+    // An effect every client draws, never another message (a client would frame what follows
+    // wrongly). op a number: one of the game's MSG_FX_* that is a point ({op, u16 x, u16 y}), two
+    // points ({op, x1, y1, x2, y2}: lightning, rays...), or MSG_FX_GREEN_BOLT (0x98: two points and
+    // the u16 frames it lasts). op a name: one of the quest's effects (MSG_GAUNTLET's):
+    // "GENERATOR_BREAK" (x, y, size 0-255: a generator's breaking burst, the game's 200),
+    // "GENERATOR_HURT" (x, y: the sparks of a blow to one), "GREEN_ZAP" (x1, y1, x2, y2, frames: the
+    // green bolt a generator's new creature comes down by).
+    server::World& world = worldOf(L);
+    std::vector<std::uint8_t> m;
+    if (lua_type(L, 1) == LUA_TSTRING) {
+        const std::string_view name = lua_tostring(L, 1);
+        m = {static_cast<std::uint8_t>(net::Op::Gauntlet)};
+        if (name == "GENERATOR_BREAK") {
+            m.push_back(0x19);
+            putPoint(m, coordArg(L, 2), coordArg(L, 3));
+            m.push_back(static_cast<std::uint8_t>(lua_isnoneornil(L, 4) ? 200 : wholeArg(L, 4, 0, 255, "a size 0-255")));
+        } else if (name == "GENERATOR_HURT") {
+            m.push_back(0x1A);
+            putPoint(m, coordArg(L, 2), coordArg(L, 3));
+        } else if (name == "GREEN_ZAP") {
+            m.push_back(0x10);
+            putPoint(m, coordArg(L, 2), coordArg(L, 3));
+            putPoint(m, coordArg(L, 4), coordArg(L, 5));
+            putU16(m, wholeArg(L, 6, 0, 65535, "its frames 0-65535"));
+        } else {
+            luaL_argerror(L, 1, "a MSG_FX_* number, or GENERATOR_BREAK, GENERATOR_HURT or GREEN_ZAP");
+        }
+        world.broadcasts().push_back({std::move(m), false, 0});
+        return 0;
+    }
     const int op = luaL_checkinteger(L, 1);
     luaL_argcheck(L, op >= 0 && op < 256, 1, "a message 0-255");
     const net::OpInfo& info = net::opInfo(static_cast<std::uint8_t>(op));
-    luaL_argcheck(L, info.name.starts_with("MSG_FX_") && info.serverToClient == 5, 1, "a point effect's message (MSG_FX_*, {x, y})");
-    server::pointFx(worldOf(L), static_cast<std::uint8_t>(op), coordArg(L, 2), coordArg(L, 3));
+    constexpr int kGreenBolt = 0x98;
+    const bool line = info.serverToClient == 9 || op == kGreenBolt;
+    luaL_argcheck(L, info.name.starts_with("MSG_FX_") && (info.serverToClient == 5 || line), 1,
+                  "an effect's message (MSG_FX_*: a point, two points, or the green bolt)");
+    if (!line) {
+        luaL_argcheck(L, lua_isnoneornil(L, 4), 4, "a point effect: x and y alone");
+        server::pointFx(world, static_cast<std::uint8_t>(op), coordArg(L, 2), coordArg(L, 3));
+        return 0;
+    }
+    m = {static_cast<std::uint8_t>(op)};
+    putPoint(m, coordArg(L, 2), coordArg(L, 3));
+    putPoint(m, coordArg(L, 4), coordArg(L, 5));
+    if (op == kGreenBolt) {
+        putU16(m, wholeArg(L, 6, 0, 65535, "its frames 0-65535"));
+    }
+    world.broadcasts().push_back({std::move(m), false, 0});
     return 0;
 }
 
@@ -2158,7 +2223,7 @@ float floatArg(lua_State* L, int idx, double lo, double hi, const char* what)
 {
     const double v = luaL_checknumber(L, idx);
     luaL_argcheck(L, v >= lo && v <= hi, idx, what);
-    return static_cast<float>(v);
+    return toolbox::toFloat(v);
 }
 
 /// A thing on the map (not in an inventory: moving one there would leave it in two places).
@@ -2574,7 +2639,7 @@ int noxSetGameNumber(lua_State* L)
     const double value = luaL_checknumber(L, 2);
     luaL_argcheck(L, std::isfinite(value) && std::fabs(value) <= 3.0e38, 2, "a finite number");
     const std::size_t index = lua_isnoneornil(L, 3) ? 0 : static_cast<std::size_t>(wholeArg(L, 3, 0, 254, "an index 0-254"));
-    lua_pushboolean(L, worldOf(L).setNumber(std::string_view(s, len), index, static_cast<float>(value)));
+    lua_pushboolean(L, worldOf(L).setNumber(std::string_view(s, len), index, toolbox::toFloat(value)));
     return 1;
 }
 
@@ -3245,8 +3310,8 @@ int noxPutOnBars(lua_State* L)
 int noxCharacterNote(lua_State* L)
 {
     // nox.characterNote(unit, text) -> whether it was sent: a line about the player's character
-    // ("level 12, act 3"), plain text, which its NoX Core client keeps beside the character it joined
-    // with and shows on its character screens (kCharacterNote). Cut to 80 bytes, control characters
+    // ("level 12, act 3"), plain text, which its NoX Core client keeps in the .plr of the character it
+    // joined with and shows on its character screens (kCharacterNote). Cut to 80 bytes, control characters
     // dropped; "" takes it away. False: a client that doesn't take it (stock, below client level 15,
     // ModeUi not named, a held-out or unit-less player): nothing sent. The same line again is sent once.
     const server::ServerObject& u = unitArg(L, 1);
@@ -4025,19 +4090,17 @@ int noxRequire(lua_State* L)
     if (!source) {
         luaL_error(L, "require: no %s", path.c_str());
     }
-    lua_CompileOptions options{};
-    options.optimizationLevel = 1;
-    options.debugLevel = 1;
-    std::size_t size = 0;
-    std::unique_ptr<char, decltype(&std::free)> bytecode(luau_compile(source->data(), source->size(), &options, &size), &std::free);
-    if (!bytecode) {
+    // (To nearest, as the main script is: a require inside a server frame reads its literals as
+    // anywhere else.)
+    const std::string bytecode = compileLuau(*source);
+    if (bytecode.empty()) {
         luaL_error(L, "require: %s couldn't be compiled", path.c_str());
     }
     const std::string chunk = "=" + path;
     // (A second chunk into the same globals: their "safe" mark off first, or Luau resolves the
     // module's globals once as it loads and keeps the values they had then.)
     lua_setsafeenv(L, LUA_GLOBALSINDEX, 0);
-    if (luau_load(L, chunk.c_str(), bytecode.get(), size, 0) != 0) {
+    if (luau_load(L, chunk.c_str(), bytecode.data(), bytecode.size(), 0) != 0) {
         lua_error(L); // (its message on the stack)
     }
     lua_pushlightuserdata(L, &impl); // (loading: a cycle's mark)
@@ -4391,7 +4454,8 @@ void Impl::useAbility(std::uint8_t peer, std::span<const std::uint8_t> payload)
         return;
     }
     const server::ServerObject* unit = world.byExtent(host->players().at(peer).extent);
-    if (!unit || unit->gone() || !unit->player || unit->player->observing || (unit->flags & server::ObjFlag::Dead)) {
+    // (A player watching a thing for the mode, nox.camera: still in play, still heard.)
+    if (!unit || unit->gone() || !unit->player || (unit->player->observing && !unit->player->modWatch) || (unit->flags & server::ObjFlag::Dead)) {
         if (asked->release) {
             parts.abilities.letGo(peer);
             abilityEnded(peer, asked->def); // (a hold let go by a player out of play: its "end")
@@ -4939,7 +5003,7 @@ public:
             if (lua_isnumber(L, -2) && lua_isnumber(L, -1)) {
                 const double x = lua_tonumber(L, -2), y = lua_tonumber(L, -1);
                 if (x >= 0 && x <= kMapExtent && y >= 0 && y <= kMapExtent) {
-                    at = std::pair{static_cast<float>(x), static_cast<float>(y)};
+                    at = std::pair{toolbox::toFloat(x), toolbox::toFloat(y)};
                 } else {
                     impl_.report("respawnPoint: a point off the map (the game's start used)");
                 }
@@ -5029,6 +5093,13 @@ public:
         bool turned = false; // (the game's own, whatever goes wrong in the script)
         impl_.guarded("onReflect", [&] { turned = impl_.parts.events.reflect(impl_.vm->thread(), target, missile, front); });
         return turned;
+    }
+    void strike(server::Fight&, server::ServerObject& victim, server::ServerObject* attacker, server::ServerObject& weapon) override
+    {
+        if (!impl_.parts.events.has().onStrike || impl_.hidden(victim) || (attacker && impl_.hidden(*attacker))) {
+            return;
+        }
+        impl_.guarded("onStrike", [&] { impl_.parts.events.strike(impl_.vm->thread(), victim, attacker, weapon); });
     }
     std::optional<CastPrice> castPrice(server::World&, const server::ServerObject& caster, std::uint32_t spell, int mana, bool trap) override
     {
@@ -5480,7 +5551,7 @@ void ScriptedMode::tick(server::GameHost& host, std::uint32_t)
         const auto inPlay = [&](std::uint8_t peer) {
             const auto it = host.players().find(peer);
             const server::ServerObject* u = it != host.players().end() ? host.server().world().byExtent(it->second.extent) : nullptr;
-            return u && !u->gone() && u->player && !u->player->observing && !(u->flags & server::ObjFlag::Dead);
+            return u && !u->gone() && u->player && (!u->player->observing || u->player->modWatch) && !(u->flags & server::ObjFlag::Dead);
         };
         for (const auto& [peer, def] : impl.parts.abilities.step(inPlay)) {
             impl.guarded("onModAbility", [&] { impl.abilityEnded(peer, def); });

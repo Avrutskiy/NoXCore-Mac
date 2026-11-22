@@ -124,6 +124,27 @@ struct ModifierDb {
     std::vector<EquipDef> weapons;
     std::vector<EquipDef> armor;
     std::vector<ModifierDef> modifiers;
+    /// noxcpp: the first id of the modifiers a mod's own data added (`NEW <name> LIKE <record>` in its
+    /// modifier.patch; things::readDataTables sets it), 256 when there are none (every table read
+    /// whole). The game's rules that find a modifier in its own tables (the reward rows a quest's and a
+    /// mode's items are held to) take one of these by its own ALLOWED_* (ownRecord).
+    std::uint16_t firstOwnId = 256;
+    bool ownRecord(const ModifierDef& m) const { return m.id >= firstOwnId; }
+    /// noxcpp: each own record's stock record, by its id less firstOwnId: the game's record its
+    /// `NEW ... LIKE` was made a copy of, through any chain of own ones (0xFF: not known). Set with
+    /// firstOwnId. The game's rules that hold an own record to its stock record's too (the reward
+    /// rows' exclusions, the '#' staff rule) read it through stockOf.
+    std::vector<std::uint8_t> ownStock;
+    /// The stock record `m` was made like (an own record), `m` itself (the game's), or nullptr when
+    /// it isn't known.
+    const ModifierDef* stockOf(const ModifierDef& m) const
+    {
+        if (!ownRecord(m)) {
+            return &m;
+        }
+        const std::size_t i = static_cast<std::size_t>(m.id - firstOwnId);
+        return i < ownStock.size() ? modifier(ownStock[i]) : nullptr;
+    }
 
     /// Each by exact name, the first of a name; modifier by id, the first of an id. (By
     /// reindex's indexes when they're of the lists as they stand, else by walking the lists.)

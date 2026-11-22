@@ -2,6 +2,8 @@
 #include "mod_parts.hpp"
 
 #include "mod_camera.hpp"
+#include "mod_creatures.hpp"
+#include "mod_fields.hpp"
 #include "mod_items.hpp"
 #include "toolbox.hpp"
 
@@ -182,7 +184,9 @@ void addPartsToolbox(lua_State* L, bool store, bool records)
     addLeapToolbox(L);
     addAbilityToolbox(L);
     addCameraToolbox(L);
+    addCreaturesToolbox(L);
     addTextsToolbox(L);
+    addFieldsToolbox(L);
 }
 
 void applyHostOptions(lua_State* L, int t, server::GameHost::Options& o, const Generation& gen, const std::string& firstMap)
