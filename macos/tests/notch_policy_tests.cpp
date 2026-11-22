@@ -10,7 +10,7 @@ struct SDL_Window {
 struct SDL_Renderer {
 } renderer;
 static bool safeOK = true, setOK = true, focused = true;
-static int rectChanges = 0, warps = 0;
+static int rectChanges = 0, ownershipChanges = 0, warps = 0;
 static float mouseX = 400, mouseY = 100;
 extern "C" {
 bool SDL_GetWindowSafeArea(SDL_Window *w, SDL_Rect *r)
@@ -38,6 +38,7 @@ bool SDL_SetWindowMouseRect(SDL_Window *w, const SDL_Rect *r)
 SDL_PropertiesID SDL_GetWindowProperties(SDL_Window *w) { return w == &primary ? 1 : 2; }
 bool SDL_SetBooleanProperty(SDL_PropertiesID p, const char *, bool v)
 {
+    ++ownershipChanges;
     (p == 1 ? primary : secondary).owned = v;
     return true;
 }
@@ -103,8 +104,9 @@ int main()
     macos::updatePointerArea(&primary, &game, 2);
     check(primary.rect.x == 0 && primary.rect.y == 32 && primary.rect.w == 800 && primary.rect.h == 568,
           "Retina bounds");
-    const int changes = rectChanges;
+    const int changes = rectChanges, writes = ownershipChanges;
     macos::updatePointerArea(&primary, &game, 2);
+    check(ownershipChanges == writes, "unchanged ownership does not rewrite the property");
     check(rectChanges == changes, "unchanged bounds do not reset SDL rect");
     for (auto type : {SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_MOUSE_BUTTON_UP,
                       SDL_EVENT_MOUSE_WHEEL}) {

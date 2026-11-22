@@ -5,6 +5,7 @@
 #include "editor/ordered_json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <iterator>
@@ -75,6 +76,19 @@ bool referenceMod(const fs::path& folder)
     }
 }
 
+bool sameFile(const fs::path& left, const fs::path& right)
+{
+    std::ifstream a(left, std::ios::binary), b(right, std::ios::binary);
+    if (!a || !b) return false;
+    std::array<char, 16384> x, y;
+    do {
+        a.read(x.data(), x.size());
+        b.read(y.data(), y.size());
+        if (a.gcount() != b.gcount() || !std::equal(x.begin(), x.begin() + a.gcount(), y.begin())) return false;
+    } while (a && b);
+    return a.eof() && b.eof() && !a.bad() && !b.bad();
+}
+
 bool sameTree(const fs::path& source, const fs::path& destination)
 {
     if (!fs::is_directory(destination) || fs::is_symlink(destination)) return false;
@@ -88,9 +102,7 @@ bool sameTree(const fs::path& source, const fs::path& destination)
             if (!fs::is_directory(target)) return false;
         } else {
             if (!fs::is_regular_file(target) || fs::file_size(entry.path()) != fs::file_size(target)) return false;
-            std::ifstream a(entry.path(), std::ios::binary), b(target, std::ios::binary);
-            if (!a || !b || !std::equal(std::istreambuf_iterator<char>(a), {}, std::istreambuf_iterator<char>(b), {})) return false;
-            if (a.bad() || b.bad()) return false;
+            if (!sameFile(entry.path(), target)) return false;
         }
     }
     for (const auto& entry : fs::recursive_directory_iterator(destination)) {
@@ -153,7 +165,7 @@ void prepareUserMods(const std::filesystem::path& bundled, const std::filesystem
     fs::create_directories(target);
     const auto stage = target.parent_path() / (".mods-import-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    if (!fs::create_directory(stage)) throw std::runtime_error("Cannot stage bundled mods: " + stage.string());
+    bool staged = false;
     try {
         for (const auto& entry : fs::directory_iterator(bundled)) {
             const auto destination = target / entry.path().filename();
@@ -163,6 +175,10 @@ void prepareUserMods(const std::filesystem::path& bundled, const std::filesystem
                 if (exists && (!referenceMod(destination) || sameTree(entry.path(), destination))) continue;
             } else if (!firstImport || exists) {
                 continue; // Editable projects, including their deletions, belong to the user.
+            }
+            if (!staged) {
+                if (!fs::create_directory(stage)) throw std::runtime_error("Cannot stage bundled mods: " + stage.string());
+                staged = true;
             }
             const auto copy = stage / entry.path().filename();
             if (entry.is_directory()) copyTreeMissing(entry.path(), copy);
@@ -180,10 +196,10 @@ void prepareUserMods(const std::filesystem::path& bundled, const std::filesystem
         if (firstImport) mark(marker);
     } catch (...) {
         std::error_code ignored;
-        fs::remove_all(stage, ignored);
+        if (staged) fs::remove_all(stage, ignored);
         throw;
     }
-    fs::remove_all(stage);
+    if (staged) fs::remove_all(stage);
 }
 
 } // namespace noxsdl

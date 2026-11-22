@@ -46,12 +46,11 @@ fs::path findGame(const std::vector<std::string>& args, const LaunchPaths& paths
     const auto current = fs::current_path(error);
     if (!error) candidates.push_back(current);
     if (!paths.home.empty()) candidates.push_back(paths.home / "Library/Application Support/NoXCore/GameData");
-    // Retain upstream's other install locations and configured last resort.
-    for (const auto& candidate : nox::io::gameDirSearch(paths.executable, paths.configuredGame)) {
-        candidates.push_back(candidate.dir);
-    }
     for (const auto& candidate : candidates) {
         if (nox::io::isGameDir(candidate)) return fs::absolute(candidate);
+    }
+    for (const auto& candidate : nox::io::gameDirSearch(paths.executable, paths.configuredGame)) {
+        if (nox::io::isGameDir(candidate.dir)) return fs::absolute(candidate.dir);
     }
     throw std::runtime_error("Nox game data wasn't found. Place NoX Core.app in your Nox data folder, "
                              "copy the data to ~/Library/Application Support/NoXCore/GameData, "
@@ -71,6 +70,17 @@ Launch prepareLaunch(std::vector<std::string> arguments, const LaunchPaths& path
     for (std::size_t i = 1; i < arguments.size();) {
         if (arguments[i] == "--user-dir") {
             arguments.erase(arguments.begin() + i, arguments.begin() + i + 2);
+        } else if (arguments[i] == "--save-dir") {
+            auto& value = arguments.at(i + 1);
+            if (!value.empty()) {
+                auto path = fs::absolute(value);
+                // Keep symlink/.. traversal intact when trimming equivalent directory spellings.
+                while (path.has_relative_path() && (!path.has_filename() || path.filename() == ".")) {
+                    path = path.parent_path();
+                }
+                value = path.string();
+            }
+            i += 2;
         } else {
             ++i;
         }

@@ -148,6 +148,9 @@ ServerObject* newThing(Fight& fight, std::string_view type)
 /// A thing type's WORTH (the object's Worth, its type's).
 std::uint32_t typeWorth(const World& world, std::string_view type)
 {
+    if (const auto own = world.ownWorth(type)) {
+        return *own; // (noxcpp: a mode's worth for this world, nox.setWorth)
+    }
     const things::ThingDef* t = world.thingDb ? world.thingDb->findThing(type) : nullptr;
     const auto w = t ? t->lastAttribute("WORTH") : std::nullopt;
     return w ? static_cast<std::uint32_t>(std::strtoul(std::string(*w).c_str(), nullptr, 10)) : 0;
@@ -455,15 +458,45 @@ ObjectKey dynamicCode(World& world, NetCode code)
 
 } // namespace
 
-bool questItem(const ServerObject& o)
+namespace {
+
+/// The game's quest items (ItemIsDroppable's table, in its order): the type, and its entry's flag 1
+/// (kept from a drop as well: Obj_DropDefault asks it), clear for the two Lich orb keys alone.
+struct KeptItem {
+    std::string_view type;
+    bool fromDrop;
+};
+constexpr KeptItem kKept[] = {
+    {"BookOfOblivion", true},      {"OblivionHalberd", true},     {"OblivionHeart", true},         {"OblivionWierdling", true},
+    {"OblivionOrb", true},         {"AmuletOfClarity", true},     {"AmuletOfTeleportation", true}, {"BridgeGuardsBoots", true},
+    {"Spectacles", true},          {"MatildasCloak", true},       {"ThaviusStaff", true},          {"BlueOrbKeyOfTheLich", false},
+    {"RedOrbKeyOfTheLich", false}, {"SilverKey", true},           {"GoldKey", true},               {"SapphireKey", true},
+    {"RubyKey", true},             {"SponsorshipLetter", true},   {"MayorsScepter", true},
+};
+
+/// The item's entry: the mode's list (nox.setKeptItems: every type kept from a drop too) or the
+/// game's; null for none.
+const KeptItem* keptEntry(const World& world, const ServerObject& o)
 {
-    static constexpr std::string_view kKept[] = {
-        "BookOfOblivion", "OblivionHalberd", "OblivionHeart", "OblivionWierdling", "OblivionOrb", "AmuletOfClarity",
-        "AmuletOfTeleportation", "BridgeGuardsBoots", "Spectacles", "MatildasCloak", "ThaviusStaff",
-        "BlueOrbKeyOfTheLich", "RedOrbKeyOfTheLich", "SilverKey", "GoldKey", "SapphireKey", "RubyKey",
-        "SponsorshipLetter", "MayorsScepter",
-    };
-    return std::ranges::find(kKept, std::string_view(o.typeName)) != std::end(kKept);
+    static constexpr KeptItem kOwn{"", true};
+    if (const std::vector<std::string>* own = world.keptItems()) { // (noxcpp: a mode's own list for this world)
+        return std::ranges::find(*own, std::string_view(o.typeName)) != own->end() ? &kOwn : nullptr;
+    }
+    const auto it = std::ranges::find(kKept, std::string_view(o.typeName), &KeptItem::type);
+    return it != std::end(kKept) ? &*it : nullptr;
+}
+
+} // namespace
+
+bool questItem(const World& world, const ServerObject& o)
+{
+    return keptEntry(world, o) != nullptr;
+}
+
+bool keptFromDrop(const World& world, const ServerObject& o)
+{
+    const KeptItem* k = keptEntry(world, o);
+    return k && k->fromDrop;
 }
 
 namespace {
@@ -1000,7 +1033,7 @@ void sell(Fight& fight, ServerObject& player, TradeSession& s, ServerObject& ite
 /// glyph ("CantSellItem"), 0x39D to the player alone.
 bool refuseSale(World& world, ServerObject& player, const ServerObject& item)
 {
-    const char* id = questItem(item) ? "Trade.c:CantSellQuestItem" : item.typeName == "Glyph" ? "Trade.c:CantSellItem" : nullptr;
+    const char* id = questItem(world, item) ? "Trade.c:CantSellQuestItem" : item.typeName == "Glyph" ? "Trade.c:CantSellItem" : nullptr;
     if (!id) {
         return false;
     }

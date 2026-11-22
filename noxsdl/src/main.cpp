@@ -536,14 +536,24 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         // LAN, XWIS when logged in, the router's port), then joined. (Online as join's:
         // Westwood Online's game list, not Network's LAN play. The game stays a solo one,
         // not a WOL game's rules, wherever it's listed.)
+        // (Game Modes' campaign row: the same game, local and unlisted as Game Modes' other modes
+        // are: no router port, no XWIS post, its end back to the main menu.)
+        const bool local = app->menus && app->menus->soloScreensLocal();
+        const auto backToMenus = [app, local] {
+            if (local) {
+                app->menus->showMainMenu();
+            } else {
+                app->menus->showGameBrowser();
+            }
+        };
         const ModeUiEntry* entry = modeUiEntry(modeId);
         if (!entry || !entry->soloScreens) {
             SDL_Log("no game mode %s", modeId.c_str());
-            app->menus->showGameBrowser();
+            backToMenus();
             return;
         }
         const SoloScreensStart& how = *entry->soloScreens;
-        app->online = xwis && !(app->menus && app->menus->lanOnly());
+        app->online = !local && xwis && !(app->menus && app->menus->lanOnly());
         app->profile = start.profile;
         app->characterFile = start.characterFile;
         app->heldFileInfo = start.info;
@@ -573,9 +583,10 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         if (app->menuHostPort != 0) {
             settings.port = app->menuHostPort; // (--menu-host-port: tests, recordings)
         }
+        const bool listed = !local && !app->hostLoopback;
         try {
             app->host = makeHost(*app, settings);
-            startPortMapping(*app, !app->hostLoopback);
+            startPortMapping(*app, listed);
             app->xwisHost.reset();
             if (app->online && app->menus && app->menus->hostLogin()) {
                 startXwisPost(*app, *app->menus->hostLogin());
@@ -583,7 +594,7 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         } catch (const std::exception& ex) {
             SDL_Log("%s: %s", how.logTag.c_str(), ex.what());
             endSoloScreensHost(*app);
-            app->menus->showGameBrowser();
+            backToMenus();
             if (const auto* refused = dynamic_cast<const nox::server::MapRefused*>(&ex)) {
                 app->menus->memoryTricksNotice(refused->map);
             }
@@ -596,7 +607,10 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
                                                                             : modeId;
         SDL_Log("%s: hosting %s at %s%s", how.logTag.c_str(), what.c_str(),
                 settings.map.c_str(), start.continueSlot.empty() ? "" : (", continuing " + start.continueSlot).c_str());
-        SDL_Log("%s", hostListingLog(menusHostListing(*app, !app->hostLoopback), how.logTag, app->host->port()).c_str());
+        SDL_Log("%s", hostListingLog(menusHostListing(*app, listed), how.logTag, app->host->port()).c_str());
+        if (local) {
+            app->soloFromMenus = true; // (its end back to the main menu, as Game Modes' other modes')
+        }
         startLive(*app, app->host->address());
         notePortMoved(*app);
     };
@@ -692,8 +706,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                 return SDL_APP_FAILURE;
             }
             const auto png = nox::encodePng(p.width, p.height, p.rgba);
-            std::ofstream(opts.mapPictureOut, std::ios::binary).write(reinterpret_cast<const char*>(png.data()),
-                                                                  static_cast<std::streamsize>(png.size()));
+            // Report success only after the PNG has been written and closed.
+            nox::writeFileBytes(opts.mapPictureOut, png);
             SDL_Log("map picture: %s %dx%d in %llu ms", nox::pathUtf8(opts.mapPictureOut).c_str(), p.width, p.height,
                     static_cast<unsigned long long>(SDL_GetTicks() - start));
         } catch (const std::exception& ex) {
@@ -716,6 +730,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     {
         bool fromDefault = false;
         const auto& settingsDir = backend::settingsDirectory(app->gameDir);
+        if (app->editorMapsDir.empty() && settingsDir != app->gameDir) app->editorMapsDir = settingsDir / "maps";
         const auto loaded = nox::config::loadConfig(settingsDir, app->gameDir, &fromDefault);
         if (!loaded) {
             SDL_Log("neither %s nor %s read: no key bindings", nox::pathUtf8(settingsDir / "nox.cfg").c_str(),
@@ -2274,7 +2289,8 @@ void drawWorld(App& app, std::vector<MapView::SceneSprite>& extra, const std::se
         const int jiggle = app.effects->jiggle();
         const int eyeShift = jiggle > 0 ? 1 - jiggle : jiggle < 0 ? -1 - jiggle : 0;
         app.sight.setClassicWalls(app.classicWalls);
-        app.sight.build(app.camera, app.view->walls(), &app.view->wallGrid(), app.view->windows(), app.things, blockers, eyeShift);
+        app.sight.build(app.camera, app.view->walls(), &app.view->wallGrid(), app.view->windows(), app.view->doorWalls(), app.things,
+                        blockers, eyeShift);
         app.sight.setSoftEdges(app.softShadowEdge);
         sight = &app.sight;
     }
@@ -2371,17 +2387,22 @@ void drawWorld(App& app, std::vector<MapView::SceneSprite>& extra, const std::se
                 // Light sources' sprites go in (lit) and widen the lit box; a later sprite over that box hides
                 // what it covers.
                 for (const auto& b : list) {
+                    // (A sprite whose BC7 upload failed isn't drawn: ready() false.)
                     if (b.source) {
+                        if (!b.sprite->ready()) {
+                            continue;
+                        }
                         if (!anyLit) {
                             lit = b.dst;
                             anyLit = true;
                         } else {
                             SDL_GetRectUnionFloat(&lit, &b.dst, &lit);
                         }
-                        b.sprite->ready();
                         app.bloom->addSprite(app.renderer, b.sprite->texture, b.sprite->source(&b.src), b.dst, b.light, b.alpha);
                     } else if (anyLit && SDL_HasRectIntersectionFloat(&lit, &b.dst)) {
-                        b.sprite->ready();
+                        if (!b.sprite->ready()) {
+                            continue;
+                        }
                         app.bloom->hide(app.renderer, b.sprite->texture, b.sprite->source(&b.src), b.dst, b.alpha);
                     }
                 }
@@ -2797,7 +2818,7 @@ SDL_AppResult SDL_AppIterate(void* appstate)
         }
         if (inGame && app->inGameSinceMs == 0) {
             app->inGameSinceMs = SDL_GetTicks();
-            characterPlayedHere(*app); // (noxcpp: a mode's game noted beside the character we joined with: character_play.hpp)
+            characterPlayedHere(*app); // (noxcpp: a mode's game in the labels of the character we joined with: character_play.hpp)
             if (app->joinTeam != 0) {
                 client.joinTeam(app->joinTeam);
             }
@@ -3041,6 +3062,7 @@ void SDL_AppQuit(void* appstate, SDL_AppResult /*result*/)
         if (app->live) {
             saveBars(*app); // leaving the game by closing the window
         }
+        characterNotesEnd(*app); // (noxcpp: labels no write took, written as the game ends: character_play.hpp)
         app->editor.reset(); // (its textures and ImGui's before the renderer)
         app->cinematics.reset();
         app->book.reset();

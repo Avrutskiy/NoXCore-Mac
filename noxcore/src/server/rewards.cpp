@@ -137,6 +137,36 @@ constexpr ModRow kMaterials[] = {
     {0, "Material6", 0x18, 0, kPowerExcl}, {0, "Material7", 0x10, 0, kPowerExcl},
 };
 
+/// What every row of a table keeps off (its rows' exclusions in common), as a row of no name: the
+/// rule for a record none of the table's rows has that a mod may still give (its own record made
+/// like such a stock record, a stock record below the table's first grade).
+template <std::size_t N>
+constexpr ModRow sharedRow(const ModRow (&rows)[N])
+{
+    ModRow shared{0, {}, 0, ~0u, ~0u};
+    for (const ModRow& r : rows) {
+        shared.armorExcl &= r.armorExcl;
+        shared.weaponExcl &= r.weaponExcl;
+    }
+    return shared;
+}
+constexpr ModRow kPowerShared = sharedRow(kWeaponPower);
+constexpr ModRow kQualityShared = sharedRow(kArmorQuality);
+constexpr ModRow kMaterialShared = sharedRow(kMaterials);
+constexpr ModRow kEnchantmentShared = sharedRow(kEnchantments);
+// (The powers and materials: off the wand staves, bows and crossbows; the armour qualities and
+// the enchantments: nothing beyond a record's own lists.)
+static_assert(kPowerShared.weaponExcl == kPowerExcl && kMaterialShared.weaponExcl == kPowerExcl);
+static_assert(kQualityShared.weaponExcl == 0 && kEnchantmentShared.weaponExcl == 0);
+static_assert((kPowerShared.armorExcl | kQualityShared.armorExcl | kMaterialShared.armorExcl | kEnchantmentShared.armorExcl) == 0);
+
+/// The stock records below each table's first row (its rows start at grade 2, the materials' at
+/// 3): in no reward table, though the game's own drops and outfits give them. Only a mod's item
+/// calls take them (modModifiersValid).
+constexpr std::string_view kPowerBelow[] = {"WeaponPower1"};
+constexpr std::string_view kQualityBelow[] = {"ArmorQuality1"};
+constexpr std::string_view kMaterialBelow[] = {"Material1", "Material2"};
+
 /// The spell table: weight, spell, stage slots. (Ten rows with neither weight nor
 /// slots: never drawn.)
 struct SpellRow {
@@ -868,23 +898,45 @@ bool replenishedStaff(const ServerObject& item)
     return std::ranges::any_of(kItems, [&](const ItemRow& r) { return r.name.starts_with('#') && r.name.substr(1) == item.typeName; });
 }
 
-} // namespace
-
-bool questModifiersValid(const ServerObject& item, const things::ModifierDb& db)
+/// questModifiersValid's rule; `modCall`: a mod's item call's (modModifiersValid).
+bool modifiersValid(const ServerObject& item, const things::ModifierDb& db, bool modCall)
 {
     const bool weapon = (item.classes & oc::Weapon) != 0;
     const std::uint32_t bits = weapon ? things::weaponBitOf(item.typeName) : things::armorBitOf(item.typeName);
     const auto allowed = [&](const things::ModifierDef& m) { return ((weapon ? m.allowedWeapons : m.allowedArmor) & bits) != 0; };
     const auto excluded = [&](const ModRow& r) { return ((weapon ? r.weaponExcl : r.armorExcl) & bits) != 0; };
+    // (noxcpp: a mod's own modifier is in no table of the game's: its section and ALLOWED_*, and the
+    // exclusions of the row of the stock record it was made like, or, when none of the slot's rows
+    // has that record, what every one of them keeps off.)
+    const auto own = [&](const things::ModifierDef& m, std::string_view section) { return db.ownRecord(m) && m.section == section; };
+    const auto stockExcluded = [&](const things::ModifierDef& m, std::span<const ModRow> rows, const ModRow& shared) {
+        const ModRow* r = findRow(rows, db.stockOf(m));
+        return excluded(r ? *r : shared);
+    };
+    // (noxcpp: a mod's item call also takes a stock record below the table's first row, held as
+    // an own record of no row is.)
+    const auto below = [&](const things::ModifierDef& m, std::span<const std::string_view> names) {
+        return modCall && !db.ownRecord(m) && std::ranges::find(names, m.name) != names.end();
+    };
+    // One slot of a table: an own record, a row's record, or (a mod's call) one below the rows.
+    const auto fits = [&](const things::ModifierDef& m, std::string_view section, std::span<const ModRow> rows, const ModRow& shared,
+                          std::span<const std::string_view> lower) {
+        if (own(m, section)) {
+            return allowed(m) && !stockExcluded(m, rows, shared);
+        }
+        if (const ModRow* r = findRow(rows, &m)) {
+            return allowed(m) && !excluded(*r);
+        }
+        return below(m, lower) && allowed(m) && !excluded(shared);
+    };
     if (const things::ModifierDef* m = db.modifier(item.modifiers[0])) {
-        const ModRow* r = findRow(weapon ? std::span<const ModRow>(kWeaponPower) : std::span<const ModRow>(kArmorQuality), m);
-        if (!r || !allowed(*m) || excluded(*r)) {
+        if (!(weapon ? fits(*m, "EFFECTIVENESS", kWeaponPower, kPowerShared, kPowerBelow)
+                     : fits(*m, "EFFECTIVENESS", kArmorQuality, kQualityShared, kQualityBelow))) {
             return false;
         }
     }
     if (const things::ModifierDef* m = db.modifier(item.modifiers[1])) {
-        const ModRow* r = findRow(kMaterials, m);
-        if (!r || !allowed(*m) || excluded(*r)) {
+        if (!fits(*m, "MATERIAL", kMaterials, kMaterialShared, kMaterialBelow)) {
             return false;
         }
     }
@@ -896,8 +948,20 @@ bool questModifiersValid(const ServerObject& item, const things::ModifierDb& db)
         if (!(m->allowedPosition & (slot == 2 ? 1u : 2u))) {
             return false;
         }
-        const bool replenishment = m->name == "Replenishment1" || m->name == "Replenishment2" || m->name == "Replenishment3" ||
-                                   m->name == "Replenishment4";
+        const auto isReplenishment = [](const things::ModifierDef* d) {
+            return d && (d->name == "Replenishment1" || d->name == "Replenishment2" || d->name == "Replenishment3" || d->name == "Replenishment4");
+        };
+        if (own(*m, "ENCHANTMENT")) {
+            // (Its own lists, and what its stock record's row keeps it off (the wand staves for
+            // the attack enchantments; one no row has: nothing, as no exclusion is every row's),
+            // or a Replenishment's '#' staff rule.)
+            const things::ModifierDef* stock = db.stockOf(*m);
+            if (!allowed(*m) || stockExcluded(*m, kEnchantments, kEnchantmentShared) || (isReplenishment(stock) && !replenishedStaff(item))) {
+                return false;
+            }
+            continue;
+        }
+        const bool replenishment = isReplenishment(m);
         const ModRow* r = findRow(kEnchantments, m);
         if (!r && !replenishment) {
             return false;
@@ -913,6 +977,18 @@ bool questModifiersValid(const ServerObject& item, const things::ModifierDb& db)
         }
     }
     return true;
+}
+
+} // namespace
+
+bool questModifiersValid(const ServerObject& item, const things::ModifierDb& db)
+{
+    return modifiersValid(item, db, false);
+}
+
+bool modModifiersValid(const ServerObject& item, const things::ModifierDb& db)
+{
+    return modifiersValid(item, db, true);
 }
 
 bool questSpellValid(int spell)

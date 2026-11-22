@@ -118,6 +118,19 @@ int main()
         noxsdl::prepareUserMods(bundled, mods);
         require(read(mods / "reference/script.luau") == "version two" && !fs::exists(mods / "reference/retired.luau"),
                 "reference upgrades replace the complete tree without stale files");
+        std::string blocks(40000, 'a');
+        std::ofstream(bundled / "reference/payload") << blocks;
+        noxsdl::prepareUserMods(bundled, mods);
+        blocks.back() = 'b';
+        std::ofstream(mods / "reference/payload") << blocks;
+        noxsdl::prepareUserMods(bundled, mods);
+        require(read(mods / "reference/payload") == read(bundled / "reference/payload"),
+                "same-size corruption in the last block repaired");
+        const auto parent = mods.parent_path();
+        fs::last_write_time(parent, fs::file_time_type::clock::now() - std::chrono::seconds(10));
+        const auto unchanged = fs::last_write_time(parent);
+        noxsdl::prepareUserMods(bundled, mods);
+        require(fs::last_write_time(parent) == unchanged, "no staging directory on an unchanged launch");
         std::ofstream(mods / "reference/mode.json") << R"({"reference":false})";
         std::ofstream(mods / "reference/script.luau") << "editable user version";
         noxsdl::prepareUserMods(bundled, mods);

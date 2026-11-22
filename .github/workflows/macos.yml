@@ -28,6 +28,17 @@ jobs:
       - name: Safe-area tests
         run: ctest --test-dir build/macos-arm64 -R mac_notch --output-on-failure
       # Native Metal and fullscreen checks run locally on a real graphics session.
+      - name: Verify bundle version
+        shell: bash
+        run: |
+          version=$(cat macos/version.txt)
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "v$version" ]]
+          fi
+          plist="build/macos-arm64/NoX Core.app/Contents/Info.plist"
+          for key in CFBundleShortVersionString CFBundleVersion; do
+            [[ "$(plutil -extract "$key" raw "$plist")" == "$version" ]]
+          done
       - name: Package
         run: ditto -c -k --keepParent "build/macos-arm64/NoX Core.app" build/NoXCore-macOS-arm64.zip
       - uses: actions/upload-artifact@v4

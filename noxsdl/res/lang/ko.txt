@@ -7110,6 +7110,8 @@ editor.status.redo_failed = 다시 실행 실패: {error}
 editor.status.refused = {action} 거부됨: {why}
 #@ 9f9d18e0 mt: {action} refused: {element} is being edited by {who}
 editor.status.refused_held = {action} 거부됨: {who} 님이 {element}을(를) 편집 중
+#@ 8e652581 mt: Saved {path}. Leftover save files are in {folder}.
+editor.status.save_cleanup = {path}에 저장했습니다. 남은 임시 저장 파일은 {folder}에 있습니다.
 #@ 0685388d mt: Save failed
 editor.status.save_failed = 저장 실패
 #@ 45b405e1 mt: Saved {path}
@@ -8358,6 +8360,8 @@ menus.host_listing.why_not_logged_in = XWIS에 로그인하지 않았고(Online 
 menus.main.game_modes = 게임 모드
 #@ 421f4a16 mt: {name} (built in)
 menus.modes.built_in_name = {name}(기본 제공)
+#@ 66743dea mt: {mode}: {description}
+menus.modes.campaign_mark_row = {mode}: {description}
 #@ 96bbf648 mt: The game's own
 menus.modes.campaign_own = 게임 기본 캠페인
 #@ bd7d04e8 mt: {campaign}, with friends.

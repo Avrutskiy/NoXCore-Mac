@@ -16,6 +16,19 @@ endforeach()
 set_property(TARGET noxsdl PROPERTY SOURCES "${client_sources}")
 target_sources(noxsdl PRIVATE "${mac}/backend.cpp" "${mac}/shader_code.cpp"
     "${mac}/pointer.cpp" "${mac}/callbacks.cpp")
+# The editor normally finds its child beside its resources. A bundle stores them separately.
+set_property(SOURCE "${client}/src/editor_glue.cpp" DIRECTORY "${client}" APPEND PROPERTY
+    COMPILE_DEFINITIONS SDL_CreateProcess=NoXMac_CreateEditorProcess)
+target_sources(noxsdl PRIVATE "${mac}/editor_process.mm")
+get_target_property(core_sources noxcore SOURCES)
+if(NOT src/io/wol_login.cpp IN_LIST core_sources)
+    message(FATAL_ERROR "Mac Keychain: check the upstream login source list")
+endif()
+list(REMOVE_ITEM core_sources src/io/wol_login.cpp)
+set_property(TARGET noxcore PROPERTY SOURCES "${core_sources}")
+target_sources(noxcore PRIVATE "${mac}/wol_login.mm")
+set_source_files_properties("${mac}/wol_login.mm" TARGET_DIRECTORY noxcore PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(noxcore PRIVATE "-framework Foundation" "-framework Security")
 # Install a per-context safe-area callback for both editors at ImGui's SDL initializer.
 get_directory_property(imgui_source DIRECTORY "${client}" DEFINITION imgui_docking_SOURCE_DIR)
 set_property(SOURCE "${imgui_source}/backends/imgui_impl_sdl3.cpp" DIRECTORY "${client}" APPEND PROPERTY
@@ -27,7 +40,10 @@ find_program(NOXSDL_SPIRV_CROSS NAMES spirv-cross REQUIRED)
 if(NOT NOXSDL_GLSLANG)
     message(FATAL_ERROR "Mac shaders need glslang")
 endif()
-set_property(SOURCE "${client}/src/main.cpp" DIRECTORY "${client}" APPEND PROPERTY COMPILE_DEFINITIONS SDL_MAIN_NOIMPL=1)
+# The bundled client uses its Dock icon. A standalone client uses the upstream ICO loader.
+set_property(SOURCE "${client}/src/main.cpp" DIRECTORY "${client}" APPEND PROPERTY
+    COMPILE_DEFINITIONS SDL_MAIN_NOIMPL=1 setWindowIcon=setMacWindowIcon)
+target_sources(noxsdl PRIVATE "${mac}/window_icon.mm")
 target_sources(noxsdl PRIVATE "${mac}/launcher.cpp" "${mac}/startup.cpp" "${mac}/user_data.cpp")
 set(metal_sources)
 set(spirv_sources)
@@ -60,7 +76,8 @@ endforeach()
 # a target dependency would create a cycle through noxsdl's SPIR-V generators.
 add_custom_target(nox_metal_shaders DEPENDS ${metal_sources})
 target_sources(noxsdl PRIVATE ${metal_sources})
-set(NOX_MAC_VERSION 0.1.1)
+file(STRINGS "${mac}/version.txt" NOX_MAC_VERSION LIMIT_COUNT 1)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${mac}/version.txt")
 configure_file("${mac}/Info.plist.in" "${output}/Info.plist" @ONLY)
 add_custom_target(noxsdl_bundle
     COMMAND "${CMAKE_COMMAND}" "-DEXECUTABLE=$<TARGET_FILE:noxsdl>"

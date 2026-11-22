@@ -17,6 +17,7 @@
 #include "noxcore/server/script_host.hpp"
 #include "noxcore/server/sound.hpp"
 #include "noxcore/server/spells.hpp"
+#include "noxcore/server/trade.hpp"
 #include "noxcore/things/object_class.hpp"
 #include "noxcore/util/bytes.hpp"
 #include "noxcore/util/x87.hpp"
@@ -1256,6 +1257,9 @@ bool Items::dropAt(ServerObject& player, ServerObject& item, float x, float y)
     if (item.holder != player.extent) {
         return false;
     }
+    if ((item.modeMarks & ModeMark::KeptByHolder) && (player.classes & (oc::Monster | oc::Player))) {
+        return false; // (noxcpp, a mode's nox.setDroppable: a creature's or a player's drop of it does nothing; a chest's or a flying chakram's as any)
+    }
     // (Obj_DropAt) In a network game but a quest a weapon, wand, armour or food (0x3001010) can't
     // be picked up at once.
     if ((world.gameFlags & GameFlag::Network) && !(world.gameFlags & GameFlag::Quest) && (item.classes & 0x3001010u)) {
@@ -1345,16 +1349,11 @@ bool Items::dropDefault(ServerObject& player, ServerObject& item, float x, float
     if (item.holder != player.extent) {
         return false;
     }
-    // A player's quest items stay with it (ItemIsDroppable(1): the exe's table),
-    // however they'd go, its death's drop too (dropAllItems ->
-    // Obj_DropAt); told only while it's neither dead nor destroyed (0x8020).
-    constexpr std::string_view kKept[] = {
-        "BookOfOblivion", "OblivionHalberd", "OblivionHeart", "OblivionWierdling", "OblivionOrb", "AmuletOfClarity",
-        "AmuletOfTeleportation", "BridgeGuardsBoots", "Spectacles", "MatildasCloak", "ThaviusStaff",
-        "BlueOrbKeyOfTheLich", "RedOrbKeyOfTheLich", "SilverKey", "GoldKey", "SapphireKey", "RubyKey",
-        "SponsorshipLetter", "MayorsScepter",
-    };
-    if ((player.classes & oc::Player) && std::ranges::find(kKept, std::string_view(item.typeName)) != std::end(kKept)) {
+    // A player's quest items stay with it (ItemIsDroppable, and its entry's flag 1: the game's
+    // table but the two Lich orb keys, or a mode's own list for the world: keptFromDrop), however
+    // they'd go, its death's drop too (dropAllItems -> Obj_DropAt); told only while it's neither
+    // dead nor destroyed (0x8020).
+    if ((player.classes & oc::Player) && keptFromDrop(world, item)) {
         if (!(player.flags & (ObjFlag::Dead | ObjFlag::Destroyed))) {
             tellString(player, "drop.c:CantDropThat");
             playSound(world, 0x39D, player, 2, player.extent);

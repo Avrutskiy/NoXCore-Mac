@@ -8,6 +8,9 @@ glslang and SPIRV-Cross. The deployment target follows libc++ floating-point fro
   cmake -S . -B build/macos-arm64 -G Ninja -C macos/cache.cmake
   cmake --build build/macos-arm64 --target noxsdl_bundle -j 4
 
+Set macos/version.txt to the intended release version before building the release artifact.
+The macOS workflow checks both version fields in the signed app and compares release tags.
+
 Packaging verifies a fresh staged bundle before replacing the previous build, so
 removed resources do not survive a rebuild. Keep user content outside the build bundle.
 
@@ -84,7 +87,8 @@ expected source is missing. It also adds the launcher, Metal shaders and app pac
 standard callback entry point is emitted by launcher.cpp, which prepares state and calls
 the original SDL_AppInit. Mac wrappers around SDL_AppEvent and SDL_AppIterate filter
 pointer input and update confinement after upstream layout and mouse-owner changes.
-SDL_AppQuit remains upstream.
+SDL_AppQuit remains upstream. On Cocoa the packaged client uses the icon declared in
+Info.plist. A standalone client or a bundle missing its icon uses the embedded ICO.
 No existing NoXCore source file is patched or copied into a modified build tree.
 
 SDL's render safe area fits the game and movie output below the notch. Pointer bounds
