@@ -40,7 +40,10 @@ find_program(NOXSDL_SPIRV_CROSS NAMES spirv-cross REQUIRED)
 if(NOT NOXSDL_GLSLANG)
     message(FATAL_ERROR "Mac shaders need glslang")
 endif()
-set_property(SOURCE "${client}/src/main.cpp" DIRECTORY "${client}" APPEND PROPERTY COMPILE_DEFINITIONS SDL_MAIN_NOIMPL=1)
+# The bundled client uses its Dock icon. A standalone client uses the upstream ICO loader.
+set_property(SOURCE "${client}/src/main.cpp" DIRECTORY "${client}" APPEND PROPERTY
+    COMPILE_DEFINITIONS SDL_MAIN_NOIMPL=1 setWindowIcon=setMacWindowIcon)
+target_sources(noxsdl PRIVATE "${mac}/window_icon.mm")
 target_sources(noxsdl PRIVATE "${mac}/launcher.cpp" "${mac}/startup.cpp" "${mac}/user_data.cpp")
 set(metal_sources)
 set(spirv_sources)

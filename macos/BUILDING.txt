@@ -87,7 +87,8 @@ expected source is missing. It also adds the launcher, Metal shaders and app pac
 standard callback entry point is emitted by launcher.cpp, which prepares state and calls
 the original SDL_AppInit. Mac wrappers around SDL_AppEvent and SDL_AppIterate filter
 pointer input and update confinement after upstream layout and mouse-owner changes.
-SDL_AppQuit remains upstream.
+SDL_AppQuit remains upstream. On Cocoa the packaged client uses the icon declared in
+Info.plist. A standalone client or a bundle missing its icon uses the embedded ICO.
 No existing NoXCore source file is patched or copied into a modified build tree.
 
 SDL's render safe area fits the game and movie output below the notch. Pointer bounds
