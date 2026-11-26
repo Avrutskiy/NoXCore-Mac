@@ -1462,8 +1462,37 @@ differences from the original are in [vanilla_deviations.md](vanilla_deviations.
   with none free it gets none.
 - **Effect:** after 64 different NPC codes in a session (net codes change from map to map), a new
   NPC / NPCWizard / Maiden isn't drawn at all (NPCDraw and MaidenDraw draw nothing without a
-  record) and its worn things and poison aren't kept.
-- **Ours:** the same (client::World, kNpcSlots).
+  record) and its worn things and poison aren't kept. The converted Hardcore Warrior campaign hits it
+  on its first maps (HW01A alone has 74 NPCs and Maidens): every NPC of a later map invisible till
+  the game is loaded again (2026-11-22 report).
+- **Ours:** the table holds 64 as the game's, but the client (client::World) frees an NPC's record
+  as its drawable goes out of sight or is destroyed (the server reports it again, colours and worn
+  things, when it's back in view) and empties the table at each map's start: only the NPCs known at
+  once count (VD-05). A stock client joined to us still has the bug.
+- **Fixed** 2026-11-22 by the owner's OK (VD-05).
+
+### OB-437: An NPC or Maiden made during play without colours or gear is never drawn
+- **Where:** an object starts with every player's report state clear. Only setNPCColor and
+  npcSetItemEquipFlags set an NPC's (state 0x400, owed MSG_REPORT_NPC). setNPCColor runs only in
+  NPCXfer and MonsterXfer (a map's load, a save's load) and for an escort carried through an exit.
+  npcSetItemEquipFlags runs when an NPC puts something on (NPCEquipWeapon / NPCEquipArmor). As a
+  player gets to know an object, netSendObjects2Plr owes it only the reports whose state is set.
+  So a map script's CreateObject / CreateObjectAt of an NPC or a Maiden gets no MSG_REPORT_NPC. So
+  does a generator's NPC whose template wears nothing (mobGeneratorSpawn copies the colours and
+  wears what the template wears) and a generator's Maiden. The client makes an NPC's record only
+  on MSG_REPORT_NPC (Cli_NewNpc in CliNet_OnPacket; the worn-thing reports need a record).
+  NPCDraw and MaidenDraw draw nothing without one.
+- **Effect:** such an NPC or Maiden is invisible until something sets a colour or makes it put
+  something on, or until the game is loaded again (the load's xfer reports it). Its corpse is
+  invisible too, and its poison isn't kept. Maps rely on this. The Hardcore Warrior maps make
+  Maidens as hidden helpers: HW07m's SpawnBall makes one, kills it at once and uses it as the
+  ball's collider, and HW10a-d's WarPullEnemy makes one, turns it off and uses it as a collider.
+  Their dying Maidens (HW03a, HW05B-C) are given colours, so they are drawn.
+- **Ours:** kept. The server owes the report from `ServerObject::npcState`, which only
+  `setNpcColor` and `npcSetItemEquipFlags` set (noxcore/src/server/npc.cpp). GameHost owes it to a
+  player newly in sight. client::World makes the record on MSG_REPORT_NPC. noxsdl's NPCDraw and
+  MaidenDraw draw nothing without one (noxsdl/src/live_scene.cpp). The console's `nx spawn` makes
+  them the same way. A mod can make one visible with nox.setNpcColors.
 
 ### OB-146: NPCDraw and MaidenDraw leave the drawing colours set
 - **Where:** NPCDraw sets materials 1-6 and at its end sets 0-5 to white, so 6 keeps the
@@ -2781,3 +2810,49 @@ differences from the original are in [vanilla_deviations.md](vanilla_deviations.
   left out, and goes after the 20 frames its count held (vanilla_deviations.md, VD-77);
   sound 9 at most once a second as useFireWand goes on to do (`fireWandUse` in
   `noxcore/src/server/items.cpp`).
+
+### OB-438: A saved creature's most health isn't saved
+- **Where:** MonsterXfer writes and reads a creature's current health alone (HealthData's first
+  word, from record version 0x31); its most health is the one the creature is made with
+  (monster.bin's HEALTH). A saved game's copy is read under switch-to-solo, where the read leaves
+  out monsterOnSpawnSpellcaster (outside game flag 0x200000), so nothing sets the most again.
+- **Effect:** a creature whose most health was raised in play comes back from a load or a map's
+  revisit with the health it had and monster.bin's most: past its most (1200 of 225 for
+  Hardcore Warrior's Ogre King, which War05B's MapInitialize sets with a memory trick), so no
+  healing or regeneration reaches it (both stop at the most); one lowered comes back with its
+  health under the type's most, and regenerates up to it. The stock maps' scripts can't
+  change a creature's most health (no builtin does), so only maps with memory tricks, and NoX
+  Core's mods (nox.setHealth), show it.
+- **Ours:** kept (the owner, 2026-11-22: match GAME.EXE). World::load's `savedCopy` (world.cpp:
+  the creatures' read skips `spawnFixup` under switch-to-solo outside 0x200000). The co-op
+  director takes the type's most again as the creature's own and puts the party's scale on top,
+  the health's share kept (modes/coop/src/coop_balance.cpp).
+
+### OB-439: "cheat gold" with an amount below 0 empties the purse
+- **Where:** the console's "cheat gold N" hands an N below 0 to playerSubGold as it is, which reads
+  it unsigned (4 billion and more) and so finds the purse short of it.
+- **Effect:** "cheat gold -100" leaves every player with no gold, not 100 less.
+- **Ours:** the same (host_console.cpp's "cheat gold").
+
+### OB-440: "cheat re-enter" outlives its game, and "cheat level" past 127 reads before XPTable
+- **Where:** "cheat re-enter" sets a global that nothing clears, read by the test of whether a
+  player shut out of play (status 0x100) may come back in. "cheat level N" keeps N's low byte,
+  compares it as a signed char (past 127 it's below 0, so not held to 10) and reads XPTable's entry
+  at that index, before the table's start.
+- **Effect:** once typed, any later game of the same run (a network game's sudden death among them)
+  lets shut-out players back in. A level of 128-255 takes whatever lies before the table as its
+  experience.
+- **Ours:** re-enter lasts the rest of the game being hosted (World::reenterAllowed, kept from map to
+  map), and such a level takes no experience (vanilla_deviations.md, VD-82).
+
+### OB-441: A thing.bin ZSIZE or EXTENT line short of a number reads leftover memory
+- **Where:** the client's thing reader reads ZSIZE with "%d %d" into a local for the bottom and,
+  for the top, into the variable that held the line's own address; with one number the top is that
+  address, with none the bottom is whatever the stack held. Its EXTENT reader reads CIRCLE's
+  radius ("%*s %f") and BOX's sides ("%*s %f %f") into stack space nothing cleared first.
+- **Effect:** a type whose ZSIZE line has one number stands as tall as a memory address (hovered
+  far above it); a CIRCLE or BOX without its numbers takes a leftover size. No shipped type has
+  such a line, and a mod's thing.patch can't write one (its EXTENT and ZSIZE need their numbers);
+  only a mod's whole thing.bin could.
+- **Ours:** a number missing reads 0 (ZSIZE's top then raised to its bottom): nox::things::thingZSize
+  and noxsdl's pick::readExtent. The game's values are memory, nothing to match.

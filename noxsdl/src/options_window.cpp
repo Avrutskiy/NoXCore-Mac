@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -24,6 +25,22 @@ constexpr std::int32_t kRes640 = 321, kRes1024Wide = 324; // (800x600 and 1024x7
 constexpr std::int32_t kResBox = 326, kResItem = 3260;
 constexpr std::int32_t kDepth8 = 331, kDepth16 = 332;
 constexpr std::int32_t kInputConfig = 341;
+constexpr std::int32_t kController = 342; ///< (noxsdl's) under Input Config, kControllerGap below it
+constexpr std::int32_t kControllerArt = 343; ///< (noxsdl's) its art: Input Config's, from OptionsBG
+/// Input Config's rim in OptionsBG lies outside its window: 5 px out on the left, right and top, 4
+/// below and a row of shadow under that, its corners rounded. Its rows in bands: from the window's
+/// top (its height 20), and how far in from the rim's sides (kRimSide out) the art starts and ends.
+struct RimBand {
+    int top, bottom; ///< rows [top, bottom) from the window's top
+    int left, right; ///< in from the rim's left and right sides
+};
+constexpr int kRimSide = 5;
+constexpr std::array<RimBand, 9> kRimBands{{{-5, -4, 3, 3}, {-4, -3, 3, 2}, {-3, -2, 1, 1}, {-2, -1, 1, 0}, {-1, 21, 0, 0},
+                                            {21, 22, 2, 1}, {22, 23, 1, 2}, {23, 24, 3, 3}, {24, 25, 1, 1}}};
+/// From Input Config's window to Controller's: Controller's rim 3 px under Input Config's shadow,
+/// as the colour depth buttons are apart.
+constexpr int kControllerGap = 12;
+constexpr int kControllerShift = 20 + kControllerGap; ///< how far below Input Config (its height and the gap)
 constexpr std::int32_t kFxVolume = 351, kDialogVolume = 352, kMusicVolume = 353;
 constexpr std::int32_t kFxOn = 361, kDialogOn = 362, kMusicOn = 363;
 constexpr std::int32_t kClose = 371;
@@ -46,8 +63,8 @@ constexpr std::array<Switch, 11> kSwitches{{
     {kFrameRate, NOX_TRK("options.switch.frame_rate", "Frame Rate"), &Extras::frameRate},
     {kBloom, NOX_TRK("options.switch.bloom", "Bloom"), &Extras::bloom},
     {kPerPixelLight, NOX_TRK("options.switch.pixel_light", "Pixel Light"), &Extras::perPixelLight},
-    {kSmoothEffects, NOX_TRK("options.switch.smooth_fx", "Smooth FX"), &Extras::smoothEffects},
-    {kHdSpellFx, NOX_TRK("options.switch.hd_spell_fx", "HD Spell FX"), &Extras::hdSpellFx},
+    {kSmoothEffects, NOX_TRK("options.switch.smooth_fx", "Smooth Spell FX"), &Extras::smoothEffects},
+    {kHdSpellFx, NOX_TRK("options.switch.hd_spell_fx", "HD FX"), &Extras::hdSpellFx},
     {kHdImages, NOX_TRK("options.switch.hd_images", "Use HD Images"), &Extras::hdImages},
     {kKillFeed, NOX_TRK("options.switch.kill_feed", "Kill Feed"), &Extras::killFeed},
     {kMouseAccel, NOX_TRK("options.switch.mouse_accel", "Win Mouse Accel"), &Extras::mouseAccel},
@@ -156,16 +173,18 @@ std::string_view extraTooltip(std::int32_t id)
                       "your screen's resolution, and a smoke blast as soft dust.\n"
                       "+ Cleaner sparks, rays and glows.\n"
                       "- Off: the original's pixel shapes.\n"
-                      "The poison cloud and Force Field are HD Spell FX\n"
+                      "The poison cloud and Force Field are HD FX\n"
                       "(on the More page).");
     case kHdSpellFx:
         return NOX_TR("options.tip.hd_spell_fx",
                       "Spells drawn anew in place of the original's sprites:\n"
                       "the poison cloud as soft billowing clouds and Force Field\n"
                       "as a glass barrier, smooth at your screen's resolution.\n"
-                      "+ Detailed spell effects at any zoom.\n"
-                      "- Off: the original's sprites.\n"
-                      "Sparks, rays and glows are Smooth FX (on the General page).");
+                      "Water as a moving surface over the original's murk, with\n"
+                      "ripples where things wade and splashes where they land.\n"
+                      "+ Detailed spell effects and water at any zoom.\n"
+                      "- Off: the original's sprites and water.\n"
+                      "Sparks, rays and glows are Smooth Spell FX (on the General page).");
     case kSmoothLabel:
     case kSmoothBox:
         return NOX_TR("options.tip.smoothing",
@@ -282,7 +301,7 @@ std::string_view extraTooltip(std::int32_t id)
     case kTabMore:
         return NOX_TR("options.tip.tab_more",
                       "Settings seldom changed: the line of sight's soft edge,\n"
-                      "Fade Objects, the HUD, the frame-rate counter, HD Spell FX,\n"
+                      "Fade Objects, the HUD, the frame-rate counter, HD FX,\n"
                       "the original's exact maths for games you host, the\n"
                       "weather effects and the original style fonts.");
     default:
@@ -433,7 +452,58 @@ void OptionsWindow::open(const nox::config::Config& config, bool inGame, const E
         optionsDef.children.insert(optionsDef.children.begin(), std::make_move_iterator(items.begin()),
                                    std::make_move_iterator(items.end()));
     }
+    // (noxcpp) Controller: under Input Config, Input Config's own button again: its art (the part of
+    // OptionsBG it sits on with its rim, under it as a window that takes no click), its lit image and
+    // its text. (On the wooden bar below the panel's boxes: the rim fits on it, clear of its foot.)
+    if (const auto input = std::ranges::find(optionsDef.children, kInputConfig, &nox::gui::WindowDef::id);
+        input != optionsDef.children.end()) {
+        nox::gui::WindowDef pad = *input;
+        pad.id = kController;
+        pad.y = input->y + input->height + kControllerGap;
+        pad.text.clear();
+        pad.tooltip.clear();
+        // (the art's window after the button: drawn before it, a click passing it to the button)
+        nox::gui::WindowDef art = pad;
+        art.id = kControllerArt;
+        art.type = nox::gui::WindowType::User;
+        art.typeName = "USER";
+        art.status = st::Enabled | st::NoFocus | st::NoInput;
+        art.style = nox::gui::style::User;
+        art.hiliteImage.clear();
+        art.selectedImage.clear();
+        art.text.clear();
+        optionsDef.children.push_back(std::move(pad));
+        optionsDef.children.push_back(std::move(art));
+    }
     window_ = gui_.load(optionsDef, proc);
+    if (gui::Window* w = window_->find(kController)) {
+        w->text = NOX_TR("options.controller", "Controller");
+    }
+    if (gui::Window* art = window_->find(kControllerArt)) {
+        // OptionsBG moved so Input Config's place on it lands here, clipped to the button and its
+        // rim (band by band, the rounded corners leaving the art under them as it is).
+        art->draw = [](gui::Window& self, gui::Painter& p) {
+            const SDL_Point at = self.screenPos();
+            const SDL_Point from = self.parent ? self.parent->screenPos() : SDL_Point{};
+            static const std::string kOptionsBG = "OptionsBG";
+            const std::string& image = self.parent ? self.parent->backgroundImage : kOptionsBG;
+            SDL_Renderer* r = p.renderer();
+            SDL_Rect was{};
+            const bool clipped = SDL_RenderClipEnabled(r);
+            SDL_GetRenderClipRect(r, &was);
+            for (const RimBand& b : kRimBands) {
+                const int x = at.x - kRimSide + b.left;
+                const SDL_FRect clipF =
+                    p.toOutput(x, at.y + b.top, self.rect.w + 2 * kRimSide - b.left - b.right, b.bottom - b.top);
+                const int x0 = static_cast<int>(std::lround(clipF.x)), y0 = static_cast<int>(std::lround(clipF.y));
+                const SDL_Rect clip{x0, y0, static_cast<int>(std::lround(clipF.x + clipF.w)) - x0,
+                                    static_cast<int>(std::lround(clipF.y + clipF.h)) - y0};
+                SDL_SetRenderClipRect(r, &clip);
+                p.image(image, from.x, from.y + kControllerShift);
+            }
+            SDL_SetRenderClipRect(r, clipped ? &was : nullptr);
+        };
+    }
     // A drop-down's button and choices all in the small font, so one list never mixes faces.
     if (gui::Window* box = window_->find(kResBox)) {
         box->dropArrow = true;
@@ -669,6 +739,7 @@ void OptionsWindow::open(const nox::config::Config& config, bool inGame, const E
             s->status |= st::Image;
             s->enabledImage = "OptionsVolumeSlider";
             s->hiliteImage = "OptionsVolumeSliderLit";
+            s->nav = gui::Window::Nav::On; // ((noxcpp) upright, yet no list's scroll bar: the pad steps it)
             s->sliderValue = std::clamp(number(config_.setting(name), 0x4000), 0, 0x4000);
         }
     }
@@ -705,6 +776,12 @@ void OptionsWindow::open(const nox::config::Config& config, bool inGame, const E
     }
 
     showPage(0); // (it opens on General)
+    // (noxcpp) The game controller's LB / RB: the panel's tabs.
+    gui_.setNavTabs([this](int step) {
+        const std::array<gui::Window*, 2> tabs{advanced_ ? advanced_->find(kTabGeneral) : nullptr,
+                                               advanced_ ? advanced_->find(kTabMore) : nullptr};
+        return gui_.stepTabs(tabs, step);
+    });
 
     // Centred across, at the top (game_initOptionsInGame), the advanced panel in its place in it.
     window_->rect.x = 0;
@@ -800,6 +877,10 @@ void OptionsWindow::goOn(After after)
         if (callbacks_.onInputConfig) {
             callbacks_.onInputConfig();
         }
+    } else if (after == After::Controller) {
+        if (callbacks_.onController) {
+            callbacks_.onController();
+        }
     } else if (callbacks_.onDismissed) {
         callbacks_.onDismissed();
     }
@@ -892,11 +973,14 @@ bool OptionsWindow::onMessage(int message, gui::Window& from)
                 showDrop(other, false);
             }
             showDrop(d, opening);
+            // ((noxcpp) the pad goes to the choice in use, and back to the button once it's shut)
+            gui_.padFocus(opening ? advanced_->find(d.item + extras_.*d.value) : &from);
             return true;
         }
         if (from.id >= d.item && from.id < d.item + static_cast<std::int32_t>(d.names.size())) {
             extras_.*d.value = from.id - d.item;
             showDrop(d, false);
+            gui_.padFocus(advanced_->find(d.box));
             setDropText(d);
             if (callbacks_.onExtras) {
                 callbacks_.onExtras(extras_);
@@ -911,12 +995,15 @@ bool OptionsWindow::onMessage(int message, gui::Window& from)
     // config at once, a click anywhere else shuts it.
     if (from.id == kResBox) {
         const gui::Window* first = window_->find(kResItem);
-        showResolutions(resolution_, first && (first->status & st::Hidden));
+        const bool opening = first && (first->status & st::Hidden);
+        showResolutions(resolution_, opening);
+        gui_.padFocus(opening ? window_->find(kResItem + std::max(resolution_, 0)) : &from);
         return true;
     }
     if (from.id >= kResItem && from.id < kResItem + static_cast<std::int32_t>(kResolutions.size())) {
         const Resolution& r = kResolutions[static_cast<std::size_t>(from.id - kResItem)];
         showResolutions(from.id - kResItem, false);
+        gui_.padFocus(window_->find(kResBox));
         setting("VideoMode", std::to_string(r.width) + " " + std::to_string(r.height) + " 16");
         return true;
     }
@@ -959,6 +1046,10 @@ bool OptionsWindow::onMessage(int message, gui::Window& from)
         deferred_.push_back([this] { closeThen(After::InputConfig); });
         return true;
     }
+    if (from.id == kController) {
+        deferred_.push_back([this] { closeThen(After::Controller); });
+        return true;
+    }
     return false;
 }
 
@@ -983,6 +1074,21 @@ bool OptionsWindow::handleEvent(const SDL_Event& event, int width, int height)
     }
     if (life_.closing()) {
         return true; // (sliding out: nothing more to press)
+    }
+    if (gui::padEscape(event) && !event.key.repeat) {
+        // (noxcpp) The game controller's Back with a drop-down open: it shut, the pad on its button.
+        if (const gui::Window* first = window_ ? window_->find(kResItem) : nullptr; first && !first->hidden()) {
+            showResolutions(resolution_, false);
+            gui_.padFocus(window_->find(kResBox));
+            return true;
+        }
+        for (const DropDown& d : drops()) {
+            if (const gui::Window* first = advanced_ ? advanced_->find(d.item) : nullptr; first && !first->hidden()) {
+                showDrop(d, false);
+                gui_.padFocus(advanced_->find(d.box));
+                return true;
+            }
+        }
     }
     if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE && !event.key.repeat) {
         close();

@@ -8,7 +8,8 @@
 //              the poison tube when poisoned; each tube a 15 x 125 column filled from the bottom
 //              in red or blue, the empty part darkened, bubbles rising in it (guiHealthManaTubeDraw); under
 //              them the potion slots (cure poison, health, mana) with what each holds, how many
-//              (the first stack's), and their keys (guiBottleSlotDrawFn; the health slot a red
+//              (the first stack's), and their keys (the game controller's buttons while it's in
+//              use) (guiBottleSlotDrawFn; the health slot a red
 //              potion, else meat, else an apple: bottle_slots.hpp). Clicking a tube toggles the small bars beside our
 //              player (guiHealthManaTubeProc, drawHealthManaBar); clicking a potion slot drinks one.
 //   quickbar   320 wide, centred, 74 from the bottom: QuickBarBase with its five 34 x 34 slots
@@ -46,6 +47,7 @@
 #pragma once
 
 #include "bottle_slots.hpp"
+#include "pad/pad_labels.hpp"
 #include "sprite_cache.hpp"
 #include "text.hpp"
 #include "thing_art.hpp"
@@ -112,6 +114,9 @@ struct QuickbarState {
     /// (InputBindings::slotLabels / potionLabels); nullptr: default.cfg's letters.
     const std::array<std::string, 5>* slotKeys = nullptr;
     const std::array<std::string, 3>* potionKeys = nullptr;
+    /// (noxcpp) While the game controller is the device in use: its buttons for the slots and
+    /// potions, drawn small in the keys' places (pad_glyphs.hpp); nullptr: the keys.
+    const pad::HudPrompts* padPrompts = nullptr;
 };
 
 class Hud {
@@ -147,6 +152,11 @@ public:
     std::optional<std::pair<int, int>> slotAt(const QuickbarState& bar, float x, float y, int w, int h) const;
     /// The trap tray's slot at output pixel (x, y), if the tray is open.
     std::optional<int> trapSlotAt(const QuickbarState& bar, float x, float y, int w, int h) const;
+    /// (noxcpp) The tray's slot `slot`'s top left in game pixels (34 x 34), as slotPosition's.
+    static SDL_FPoint trapSlotPosition(int w, int h, int slot);
+    /// (noxcpp) The "Spell Set n" title's box over the bar in game pixels (drawn while the sets
+    /// aren't all showing and the trap tray is shut).
+    static SDL_FRect spellSetTitleBox(int w, int h);
     /// gamedata.bin, for the trap costs and the abilities' cooldowns (nullptr: none known).
     void setGameData(const nox::things::GameData* data) { gameData_ = data; }
     /// The game's flags, which of gamedata.bin's lines it reads (SOLO in a solo game, ARENA online).
@@ -179,6 +189,8 @@ public:
     /// A named image (thing.bin's images), for pictures drawn beside the HUD (the game-over
     /// banner's).
     const nox::things::ImageDef* image(const std::string& name) const;
+    /// The app's thing.bin was replaced (game_data_swap.hpp): its named images looked up again.
+    void tablesChanged();
 
 private:
     struct Bubble {
@@ -194,8 +206,9 @@ private:
 
     const nox::things::ThingDb& things_;
     ThingArt& art_;
-    /// The named images draw() uses, looked up once as the HUD is made (thing.bin's images never
-    /// change after that; nullptr: thing.bin has none by that name, drawn as nothing).
+    /// The named images draw() uses, looked up once as the HUD is made and again when the tables
+    /// are replaced (tablesChanged; nullptr: thing.bin has none by that name, drawn as nothing).
+    void lookUpNamed();
     struct Named {
         using Def = const nox::things::ImageDef*;
         std::array<Def, 5> nugget{}, nuggetLit{}, warriorNugget{}; ///< QuickBar(Warrior)Nugget1-5(Lit)

@@ -289,6 +289,16 @@ Options switch unless noted.
   where they'll be when our input reaches the server (their velocity times the smoothing delay
   plus the learnt input lag, ~9 frames live), so what we aim at is where a spell will land;
   vanilla draws them where the server last said. Newest draws them so (no smoothing delay).
+- **The white flash lasts a game frame's time** (MSG_FX_WHITE_FLASH; 2026-11-22, white_flash.hpp):
+  the original's handler sets a flag and its next drawn world frame is white, one frame at its 30
+  a second. noxsdl draws faster, so every frame begun within 30 ms of the first white one is
+  white (4 at 120 Hz, 2 at 60, 1 at 30), timed by the clock, not the game's frame, which stands
+  still through a solo level-up's 5 s pause. Always on.
+- **An NPC's record goes with its drawable** (OB-145; 2026-11-22, client::World): the original's
+  64 NPC records are freed only at a game's start, so after 64 NPC codes seen in a session no new
+  NPC is drawn. Ours free one at MSG_OBJECT_OUT_OF_SIGHT or MSG_DESTROY_OBJECT for it (the server
+  then reports it again when it's back) and all at MSG_USE_MAP: 64 known at once. Revert: drop
+  the `npcs_` erase and clear.
 - **Front walls are always translucent** (vanilla's TranslucentFrontWalls, an option there).
 - **A door standing on a wall cell is drawn, as the host draws it** (2026-11-21, OB-436): the
   original's host marks the cell each map door's leaf takes and never sweeps or draws a wall there;
@@ -337,13 +347,19 @@ Options switch unless noted.
     arm is drawn whole, not cut through its pillar at its hidden half;
   - nor a see-over wall (WALL flag 1 off) where only a sight-blocking object hides its base: the
     see-over walls behind a door's leaf are drawn whole over the door's dark wedge (the floor and
-    the things behind the door stay hidden);
+    the things behind the door stay hidden). "Only" is checked against the same sight worked out
+    without the objects (2026-11-22): a base that a wall hides as well stays hidden. Before, the
+    object being the nearest occluder was enough, so every fence or cage anywhere in an object's
+    wedge was drawn, floating in the dark past the room's walls (a Hardcore Warrior player's cages,
+    seen past a wall from beside a pillar);
   - a flat base (direction 2) is walked column by column like the sloped ones, so the game's quirk
     of drawing one wholly before a span from that span on is gone.
   Still the game's: which walls are reached at all (walls behind other walls stay hidden, and so do
   their cuts at other occluders' shadow edges), a junction drawn as the direction its seen arms
   make, the half images of directions 8 / 10. Walls drawn just off the screen are marked seen for
-  the map as drawn walls are. Cost: a second sweep a frame, some 0.04 ms at 240 walls.
+  the map as drawn walls are. Cost: a second sweep a frame, some 0.04 ms at 240 walls, and a third
+  (the grown view's walls without the objects) in a frame with sight-blocking objects and a see-over
+  wall in view.
 - **Fade Objects** (nox.cfg FadeObjects, on by default as the game's fast-machine default;
   2026-10-14): the rule is the exe's (noxcore client/fade.hpp: the scene sort for the general
   list, CliNet_OnPacket's MSG_OBJECT_IN_SHADOWS keeping the drawable gameFPS frames, the generic
@@ -826,7 +842,7 @@ frames and sound are its decoder's (noxcore video/vqa.hpp). Where noxsdl differs
   bug, the slot looking castable while the server refuses the cast for want of mana.
 - **Revert:** drop the isSummonSpell branch in slotManaCost (the slot then reads thing.bin's 0).
 
-### VD-48: HD Spell FX: the poison cloud, Force Field and Reflective Shield drawn anew
+### VD-48: HD Spell FX: the poison cloud, Force Field, Reflective Shield and water drawn anew
 
 - **Vanilla:** the spells' looks are sprites. A toxic cloud puts a GreenPuff or GreenSmoke
   animation within its reach every other frame, rising and fading. The Force Field (the Shield
@@ -853,6 +869,22 @@ frames and sound are its decoder's (noxcore video/vqa.hpp). Where noxsdl differs
     against the original's (the back view was close); the Reflective Shield draws the original
     sprite whatever the switch (`kRippleShield` in effects_enchant.cpp) until it's reworked.
     The shader and the shapes stay in the code.
+  - the Water floors (Water, and WaterNoTeleport, which has Water's tiles) at the floor target's
+    resolution (noxsdl/src/hd_water.hpp, water_base.hpp; shaders/fx_water.frag.hlsl), in world
+    space, in the water's place in each tile (the whole tile, or its share where edges blend the
+    water in or out, as the HD floor composite mixes them), in place of the water's tiles whatever
+    the image source (the pack's own water tiles included). It is made from the
+    floor's own tiles (video.bag's, whatever the image source): the original's colours, murk and
+    flecks smoothly upsampled with a fine grain below the texel, kept within the tiles' own range.
+    The original draws only the first of the floor's six frames (FrameOffset stays 0 in 1.2b:
+    vanilla water stands still); ours runs the six frames smoothly one into the next, the loop in
+    4 s (`HdWater::kFramesPerSecond`). Over that murk, a water surface of our own: waves that bend
+    and shade it, a sheen off them from the game's lights, a band lapping at the shore with a little
+    foam, and ripples and splashes where the game's things are in the water (a creature standing or
+    wading, a missile ending over it, a thing falling into it, an item turning up in it, a creature
+    dying in it: water_ripples.hpp, from what the client already knows of its drawables). Off, the
+    floor is drawn as ever, from whatever the image source gives (the pack's tiles where it has
+    them).
   Smooth FX keeps the rest (sparks, rays, glows, lines and dots, and the smoke blast's soft dust).
   Both need the GPU renderer's shaders (greyed without). Purely what the client draws: nothing
   changes in the game, on the wire or at the server.
@@ -1594,6 +1626,60 @@ The engine's logic is the exe's; these are where the output differs.
     the middle of the screen for a few seconds, and in the console).
 - **Revert:** don't host one (every hook the core gives a mode is a no-op without one).
 
+### VD-80: The console's `load`: a co-op campaign's party to a campaign map; the installed mods' maps
+
+- **Vanilla:** the host console's `load <map>` (ParseCmd.c, a cheat) loads a network map that
+  allows the mode being played. Out of a network game (a solo game) it takes a campaign map (type
+  1) instead, with no mode test: the map's own file from the maps folder, never a visited map's
+  saved copy in WORKING (no switch-to-solo), nothing saved first, the copy left as it is; the map
+  starts anew (MapInitialize, then MapEntry), the player at a player start, and no AUTOSAVE after
+  it (mapLoadOrSaveMB(1)). A map of the wrong kind (a solo map in a network game, a network map in
+  a solo game) is passed over without a word. A name not in the maps folder is "CannotAccessMap".
+- **Ours:**
+  - The solo game's load is GAME.EXE's (a co-op campaign's too, stock or a campaign mod's). A map
+    of the wrong kind is refused with "NoMapLoadNewMode" rather than silently.
+  - In a co-op campaign (modes/coop: GameHost::Options::consoleLoad) the director is asked first
+    (CoopDirector::consoleLoad): while a save is asked for or waiting (a map's AUTOSAVE in its
+    first second), or with the host down, it says it can't now and nothing loads; else the party is
+    made ready to leave (every talk closed, the glyphs on the ground gone, a script's freeze let
+    go), then the console loads the map as above. (Until 2026-11-23 the party went as through a way
+    on: the WORKING save first and a visited map's saved copy, so a map passed through came back
+    as it was left with the party at its old way out: a Hardcore Warrior author's report.)
+  - A name the game doesn't find (its mode's own maps, then the maps folder, as every lookup) is
+    looked for in the other installed mods' maps (each mod's maps\, indexed as the mods are read).
+    One mod's is loaded, and is this game's map of that name from then on (GameHost::findMap: its
+    download, a way back to it); its .rul files are read beside it, never written. In two or more:
+    it names them, and `load <mod id>/<map>` loads that one. A name the game has itself stays the
+    game's (the mod's is refused, said so), and a mod with game data of its own is refused (its
+    maps want its tables: host that mod). Every refusal of the map's type stays as GAME.EXE's (said
+    as above): a plain network game still refuses a solo map, a mod's included.
+  - The host's own client finds such a map's file as the host does (GameHost::hostMapLookup: the
+    mode's maps, then those the console took from other mods, a copy shared under its own lock as
+    the client reads it on its own thread), so it never downloads it from its own game; a mod
+    that ships no .nxz is played by the host as well, and since 2026-11-24 its guests download it
+    in a network game too: a mode's own map or a console-pinned one without a .nxz is sent built
+    from its .map (GameHost::mapSendLoadMap; a maps-folder map without one is still CompressFail,
+    as GAME.EXE).
+  - For testing specific maps (the owner's request of 2026-11-22; the host's own client by the
+    owner's decision of 2026-11-22).
+- **Revert:** host_console.cpp's `load` without consoleMapOf and Options::consoleLoad (CoopDirector
+  sets it in configure); the host's client's lookup without the pinned maps (hostMapLookup); the
+  wrong kind's refusal without its line.
+
+### VD-81: A co-op campaign's guests need the sysop's password for the host's commands
+
+- **Vanilla:** a client's MSG_SERVER_CMD runs a map script function by name (1) or a host console
+  command (2) for a sysop (a client that gave the sysop's password, MSG_SYSOP_PW), or for anyone in
+  a solo game (game flag 0x800: SrvNet_OnServerCmd). The game's solo game has no one but its host.
+- **Ours (`noxcore/src/server/host_console.cpp`, GameHost::onServerCmd):** a solo game with guests
+  (the co-op campaign, stock or a campaign mod's: GameHost::Options::soloGuests) has others in it
+  too, so the solo game's exemption is the host's own player's alone (GameHost::isHostPlayer).
+  A guest is treated as in a network game: refused unless it gave the sysop's password. A solo
+  game with no guests, the plain campaign, is as before (its one player is the host).
+- **Why:** otherwise any guest's client that sends the message runs any of the host's commands
+  (kick, ban, cheat, exec, set, load) and any map function: the owner's decision (2026-11-22).
+- **Revert:** take `isHostPlayer` out of onServerCmd's test.
+
 ### VD-42: A mode's dead players keep their things (World::keepThingsOnDeath)
 
 - **Vanilla:** outside a quest a dead player's things go on the ground round it (Plr_Die's
@@ -1888,6 +1974,18 @@ The engine's logic is the exe's; these are where the output differs.
 - **Risk:** a player last told a set and since out of sight gets one more report when it sees the
   object again; nothing else changes. Four bytes an object.
 - **Revert:** in `setEnchantments` drop `o.enchantOwed |= o.enchantTold;`.
+
+### VD-82: "cheat re-enter" lasts the game it's typed in; "cheat level" past 127 takes no experience
+
+- **Vanilla:** the console's "cheat re-enter" (outside a network game) sets a global no game
+  clears: every later game of the run lets players shut out of play (status 0x100) back in. "cheat
+  level N" past 127 (its low byte, a signed char) reads XPTable before its start for the
+  experience (original_bugs.md, OB-440).
+- **Ours (`noxcore/src/server/host_console.cpp`):** World::reenterAllowed, kept from map to map
+  (Server's world setup) for the rest of the game being hosted, no further; such a level's
+  experience is 0. The rest of both cheats is the game's.
+- **Revert:** a process-wide switch for re-enter; nothing to take for the level (the game's value
+  is memory outside the table).
 
 ## Menus: Westwood Online (no effect on the wire)
 

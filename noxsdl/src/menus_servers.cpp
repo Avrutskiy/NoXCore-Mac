@@ -1,5 +1,6 @@
 // One address per action: the saved-address dropdown is independent of discovery results.
 #include "menus.hpp"
+#include "text_fit.hpp"
 
 #include "noxcore/strings/l10n.hpp"
 #include "noxcore/strings/string_table.hpp"
@@ -67,10 +68,8 @@ void Menus::serverDialog()
     // These helpers only operate on this dialog. The underlying addresses are never shortened.
     const auto label = [this](std::string address) {
         gui::Painter painter(nullptr, gui_.resources(), 640, 480);
-        if (painter.textWidth(address, false) <= kLabelWidth) return address;
-        auto text = nox::strings::fromUtf8(address);
-        while (!text.empty() && painter.textWidth(nox::strings::toUtf8(text) + "...", false) > kLabelWidth) text.pop_back();
-        return nox::strings::toUtf8(text) + "...";
+        // (Cut a whole letter at a time: never half a character.)
+        return fitText(std::move(address), kLabelWidth, [&](const std::string& t) { return painter.textWidth(t, false); });
     };
     const auto scroll = [this, state](int to) {
         auto* list = dialog_->find(kList);
@@ -83,6 +82,7 @@ void Menus::serverDialog()
     };
     const auto drop = [this, state, scroll](bool open) {
         open = open && !state->addresses.empty() && !state->confirming;
+        const bool was = !dialog_->find(kList)->hidden();
         for (const int id : {kList, kUp, kDown, kSlider}) dialog_->find(id)->show(open);
         if (open) {
             auto* list = dialog_->find(kList);
@@ -90,6 +90,9 @@ void Menus::serverDialog()
             scroll(list->selectedLine - kRows + 1);
         }
         gui_.setFocus(open ? nullptr : dialog_->find(kEntry));
+        if (open != was) {
+            gui_.padFocus(dialog_->find(open ? kList : kDrop)); // ((noxcpp) the pad into the list and back to its button)
+        }
     };
     const auto normal = [this, state, drop] {
         state->confirming = false;
@@ -158,6 +161,7 @@ void Menus::serverDialog()
             return true;
         }
         if (message == gui::EntryEntered && from.id == kEntry) { ask(true); return true; }
+        if (message == gui::PadScrolled && from.id == kList) { scroll(from.scroll); return true; } // ((noxcpp) the pad's line kept in view)
         if (message != gui::Clicked) return false;
         switch (from.id) {
         case kClose: deferred_.push_back([this] { closeDialog(); }); break;
@@ -225,8 +229,14 @@ void Menus::serverDialog()
         arrow->backgroundImage = image; arrow->hiliteImage = std::string(image) + "Lit";
     }
     gui::useSliderThumb(dialog_->find(kSlider));
+    // ((noxcpp) The game controller: the list's line moves without choosing (A chooses), its arrows
+    // aren't stops, and the pad starts on the address field (A types).)
+    dialog_->find(kList)->navLineClicks = false;
+    dialog_->find(kUp)->nav = gui::Window::Nav::Off;
+    dialog_->find(kDown)->nav = gui::Window::Nav::Off;
     normal(); reload();
     gui_.setModal(dialog_);
+    gui_.setNavDefault(dialog_->find(kEntry));
     dialogKeysOf_ = dialog_;
     dialogEvents_ = [this, state, drop, scroll, choose, normal](const SDL_Event& event) {
         const bool open = !dialog_->find(kList)->hidden();

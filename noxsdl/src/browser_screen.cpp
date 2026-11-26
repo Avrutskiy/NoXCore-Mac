@@ -4,6 +4,7 @@
 #include "client_level_gate.hpp"
 #include "mode_column.hpp"
 #include "pencil_icon.hpp"
+#include "text_fit.hpp"
 
 #include "noxcore/strings/l10n.hpp"
 
@@ -303,6 +304,13 @@ bool BrowserScreen::sawStock(const std::string& server) const
     });
 }
 
+SDL_FPoint BrowserScreen::selectedRowPoint() const
+{
+    const Layout& l = lastLayout_;
+    const float row = static_cast<float>(std::max(selected_ - scroll_, 0)) + 0.5f;
+    return {area_.x + area_.w * 0.35f, l.top + l.rowHeight * row};
+}
+
 std::optional<std::string> BrowserScreen::handleEvent(const SDL_Event& event, std::uint64_t nowMs)
 {
     // Uses the layout of the last draw, so clicks map onto the rows as they were shown.
@@ -482,11 +490,7 @@ void BrowserScreen::drawRows(SDL_Renderer* renderer, SDL_FRect area, const Layou
         if (font_.measure(shown, l.size) > room - afterWidth) {
             const float dots = font_.measure("...", l.size);
             while (!shown.empty() && (font_.measure(shown, l.size) + dots > room - afterWidth || shown.back() == ' ')) {
-                // (a whole UTF-8 character: its continuation bytes, then its lead)
-                while (shown.size() > 1 && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0x80) {
-                    shown.pop_back();
-                }
-                shown.pop_back();
+                popLetter(shown); // (a whole UTF-8 character)
             }
             shown += "...";
         }

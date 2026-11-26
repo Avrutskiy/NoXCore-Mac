@@ -95,7 +95,13 @@ add_executable(noxsdl WIN32
     src/gpu_shader_code.cpp
     src/gpu_shaders.cpp
     src/gui.cpp
+    src/gui_nav.cpp
+    src/gui_focus_frame.cpp
+    src/gui_window.cpp
     src/hd_video.cpp
+    src/hd_water.cpp
+    src/water_base.cpp
+    src/water_ripples.cpp
     src/hosting.cpp
     src/bottle_slots.cpp
     src/hud.cpp
@@ -103,6 +109,8 @@ add_executable(noxsdl WIN32
     src/move_predictor.cpp
     src/input.cpp
     src/input_config_window.cpp
+    src/input_mode_ask.cpp
+    src/controller_window.cpp
     src/inventory.cpp
     src/inventory_grid.cpp
     src/item_names.cpp
@@ -123,6 +131,7 @@ add_executable(noxsdl WIN32
     src/image_decoder.cpp
     src/menus.cpp
     src/mode_ui.cpp
+    src/campaign_mod.cpp
     src/campaign_line.cpp
     src/character_play.cpp
     src/mods_folder.cpp
@@ -132,6 +141,23 @@ add_executable(noxsdl WIN32
     src/menus_wolchat.cpp
     src/options_window.cpp
     src/overlays.cpp
+    src/pad/gamepad_manager.cpp
+    src/pad/hangul.cpp
+    src/pad/osk.cpp
+    src/pad/osk_game.cpp
+    src/pad/pad_aim.cpp
+    src/pad/pad_bindings.cpp
+    src/pad/pad_game.cpp
+    src/pad/pad_glyphs.cpp
+    src/pad/pad_labels.cpp
+    src/pad/pad_menu.cpp
+    src/pad/pad_mode.cpp
+    src/pad/pad_picture.cpp
+    src/pad/pad_panel_nav.cpp
+    src/pad/pad_panels.cpp
+    src/pad/pad_play.cpp
+    src/pad/pad_remap.cpp
+    src/pad/virtual_pad.cpp
     src/minimap.cpp
     src/map_thumbnail.cpp
     src/map_vote_window.cpp
@@ -247,7 +273,7 @@ endif()
 # time. Without either compiler the GPU renderer still runs and recolours sprites on the CPU.
 set(NOXSDL_SHADERS
     material.frag material_split.frag fx_disc.frag fx_rect.frag fx_glow.frag fx_glowline.frag fx_puff.frag
-    fx_barrier.frag fx_ripple.frag bloom_blur.frag bloom_bright.frag fx_light.frag gamma.frag
+    fx_barrier.frag fx_ripple.frag fx_water.frag bloom_blur.frag bloom_bright.frag fx_light.frag gamma.frag
     # A map editor session's pending edits.
     pending.frag
     # nox.weather's rain, snow, storm and wind (weather.cpp).

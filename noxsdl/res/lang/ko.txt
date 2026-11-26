@@ -5,6 +5,15 @@
 # native speaker hasn't checked yet (drop it once checked). Keep every {placeholder}, %d and
 # ## id as the English has them. \n is a new line, \s a space at either end.
 
+#@ 590d8dc4 mt: More than one mod has a map named {map} ({mods}). Name the one to load, for example: load {mod}/{map}
+console.load.ambiguous = {map} 맵이 여러 모드에 있습니다({mods}). 불러올 맵을 지정하세요. 예: load {mod}/{map}
+#@ 13d1f9bf mt: {map} belongs to {mod}, which uses its own game data. Host {mod} to play it.
+console.load.mod_data = {map} 맵은 자체 게임 데이터를 쓰는 {mod} 모드의 맵입니다. 이 맵을 플레이하려면 {mod} 게임을 호스트하세요.
+#@ 2d012396 mt: This game already has its own map named {map}, so {mod}'s map of that name can't be loaded here.
+console.load.name_taken = 이 게임에는 이미 {map}(이)라는 자체 맵이 있어서, 같은 이름의 {mod} 맵은 여기서 불러올 수 없습니다.
+#@ 5d738dbd mt: The party can't go to {map} right now (a save is under way, or the host is down). Try again in a moment.
+console.load.party_busy = 지금은 파티가 {map}(으)로 갈 수 없습니다(저장 중이거나 호스트가 쓰러져 있음). 잠시 후 다시 시도하세요.
+
 #@ c451710f mt: nothing to play
 content.audio.nothing_to_play = 재생할 것이 없음
 #@ 2b043744 mt: Black
@@ -1831,6 +1840,191 @@ content.text_form.save_as = 다른 이름으로 저장...
 content.text_form.save_as_tip = 새 파일을 씁니다(이 파일을 덮어쓰지 않으며 게임 폴더에도 쓰지 않습니다). 사용하려면 게임 사본에 넣으세요.
 #@ a29f3abb mt: What the game reads
 content.text_form.what_game_reads = 게임이 읽는 내용
+
+#@ 0a77a91f mt: Action
+controller.action.action = 행동
+#@ bd2ae345 mt: Quick Auto Load
+controller.action.auto_load = 빠른 불러오기
+#@ b25b5a3c mt: Quick Auto Save
+controller.action.auto_save = 빠른 저장
+#@ 2279d8cb mt: Chat
+controller.action.chat = 채팅
+#@ 43a4d598 mt: Decrease Gamma
+controller.action.decrease_gamma = 감마 낮추기
+#@ c7ab4580 mt: Decrease Window Size
+controller.action.decrease_window_size = 창 크기 줄이기
+#@ 1e0b5aec mt: Increase Gamma
+controller.action.increase_gamma = 감마 높이기
+#@ e1fe06fc mt: Increase Window Size
+controller.action.increase_window_size = 창 크기 늘리기
+#@ 1e2eb9ef mt: Interact
+controller.action.interact = 상호작용
+#@ 4f7b37e0 mt: Invert Spell Target
+controller.action.invert_spell_target = 주문 대상 반전
+#@ 43d2e3a0 mt: Invoke Slot 1
+controller.action.invoke_slot1 = 슬롯 1 사용
+#@ 46d2e859 mt: Invoke Slot 2
+controller.action.invoke_slot2 = 슬롯 2 사용
+#@ 45d2e6c6 mt: Invoke Slot 3
+controller.action.invoke_slot3 = 슬롯 3 사용
+#@ 48d2eb7f mt: Invoke Slot 4
+controller.action.invoke_slot4 = 슬롯 4 사용
+#@ 47d2e9ec mt: Invoke Slot 5
+controller.action.invoke_slot5 = 슬롯 5 사용
+#@ 0e1ef32d mt: Jump
+controller.action.jump = 점프
+#@ 5c52d15e mt: Laugh
+controller.action.laugh = 웃기
+#@ 841485db mt: Map Zoom In
+controller.action.map_zoom_in = 맵 확대
+#@ bbfb0488 mt: Map Zoom Out
+controller.action.map_zoom_out = 맵 축소
+#@ 50b26149 mt: Accept
+controller.action.menu_accept = 확인
+#@ c2954bc2 mt: Back
+controller.action.menu_back = 뒤로
+#@ 4eddf33c mt: Second Layer (hold)
+controller.action.modifier = 두 번째 레이어 (누르고 있기)
+#@ a38f0461 mt: Move Forward
+controller.action.move_forward = 앞으로 이동
+#@ f39ed8ce mt: Next Spell Set
+controller.action.next_spell_set = 다음 주문 세트
+#@ 38aaa757 mt: Place Trap/Bomber
+controller.action.place_trap_bomber = 함정/폭탄병 설치
+#@ eaa8ef31 mt: Point
+controller.action.point = 가리키기
+#@ 005c500e mt: Previous Spell Set
+controller.action.previous_spell_set = 이전 주문 세트
+#@ 04205517 mt: Quick Cure Poison
+controller.action.quick_cure_poison = 빠른 해독
+#@ eedcc302 mt: Quick Health
+controller.action.quick_health = 빠른 체력 회복
+#@ 2ef43133 mt: Quick Mana
+controller.action.quick_mana = 빠른 마나 회복
+#@ 12e8a9c4 mt: Save Screen Shot
+controller.action.screen_shot = 스크린샷 저장
+#@ 103f00af mt: Select Spell Set
+controller.action.select_spell_set = 주문 세트 선택
+#@ f9c8c15b mt: Swap Weapons
+controller.action.swap_weapons = 무기 교체
+#@ 29436cfe mt: Tab Right
+controller.action.tab_next = 오른쪽 탭
+#@ 49dda025 mt: Tab Left
+controller.action.tab_previous = 왼쪽 탭
+#@ a06512a1 mt: Next Target
+controller.action.target_next = 다음 대상
+#@ ba70c761 mt: Previous Target
+controller.action.target_previous = 이전 대상
+#@ 4b85aa03 mt: Taunt
+controller.action.taunt = 도발
+#@ e1a1bf62 mt: Team Chat
+controller.action.team_chat = 팀 채팅
+#@ b0feccda mt: Toggle Book
+controller.action.toggle_book = 주문서
+#@ 63d2a1c4 mt: Toggle Console
+controller.action.toggle_console = 콘솔
+#@ b44abbaa mt: Toggle GUI
+controller.action.toggle_gui = 인터페이스 켜기/끄기
+#@ d89cd561 mt: Toggle Inventory
+controller.action.toggle_inventory = 인벤토리
+#@ 0c0052ff mt: Toggle Map
+controller.action.toggle_map = 맵
+#@ b435c2aa mt: Toggle NetGraph
+controller.action.toggle_netstat = 네트워크 그래프
+#@ ade5443f mt: Toggle Quit Menu
+controller.action.toggle_quit_menu = 종료 메뉴
+#@ 646ab6dc mt: Toggle Ranking GUI
+controller.action.toggle_rank = 순위표
+#@ 7ae4abf3 mt: Toggle Server Menu
+controller.action.toggle_server_menu = 서버 메뉴
+#@ 58de2772 mt: Normal
+controller.aim.normal = 보통
+#@ 0dc6b4aa mt: Off
+controller.aim.off = 끄기
+#@ 0dad409a mt: Strong
+controller.aim.strong = 강하게
+#@ 6de87ae9 mt: Weak
+controller.aim.weak = 약하게
+#@ c2954bc2 mt: Back
+controller.button.back = 뒤로
+#@ c29fa477 mt: Defaults
+controller.button.defaults = 기본값
+#@ 0ac8a560 mt: Reset
+controller.button.reset = 초기화
+#@ 1e9d32c2 mt: With {button} held
+controller.caption.layer = {button}을(를) 누른 상태
+#@ b84fa13e mt: Left stick: walk, and run when leant far
+controller.caption.left_stick = 왼쪽 스틱: 걷기, 많이 기울이면 달리기
+#@ cf5d2702 mt: Right stick: aim; a flick picks the next target
+controller.caption.right_stick = 오른쪽 스틱: 조준; 튕기면 다음 대상
+#@ 0a77a91f mt: Action
+controller.header.action = 동작
+#@ 33881a91 mt: Button
+controller.header.button = 버튼
+#@ 5ce477a4 mt: Or
+controller.header.second = 또는
+#@ c52bff6d mt: In the menus
+controller.list.menus = 메뉴에서
+#@ 201a7a8b mt: Kept While Held
+controller.lock.held = 누르는 동안 유지
+#@ 8db969e1 mt: Picked Again
+controller.lock.retarget = 다시 선택
+#@ b986d834 mt: No controller connected: the buttons are named by place.
+controller.none = 연결된 컨트롤러 없음: 버튼을 위치로 표시합니다.
+#@ 2fac5a23 mt: Taken from {actions}.
+controller.notice.moved = {actions}에서 가져옴.
+#@ 92ddfd57 mt: That button can't go there.
+controller.notice.refused = 그 버튼은 여기에 지정할 수 없습니다.
+#@ 58e09c50 mt: Swapped with {actions}.
+controller.notice.swapped = {actions}와(과) 교환.
+#@ 15d528af mt: Hold {button} to leave it as it is, or press Escape.
+controller.popup.cancel = 그대로 두려면 {button}을(를) 누르고 있거나 Escape를 누르세요.
+#@ f50675e4 mt: Escape leaves it as it is.
+controller.popup.cancel_key = Escape를 누르면 그대로 둡니다.
+#@ 21ddb45c mt: {action}, with {button} held
+controller.popup.layer = {action}, {button}을(를) 누른 상태
+#@ 85283a00 mt: Press a button on the controller for
+controller.popup.press = 컨트롤러의 버튼을 누르세요:
+#@ 2d49b726 mt: As the Controller
+controller.prompts.auto = 컨트롤러에 맞춤
+#@ 5095b20d mt: Aim Assist
+controller.setting.aim_assist = 조준 보조
+#@ 0db04146 mt: Invert the Right Stick's Up and Down
+controller.setting.invert = 오른쪽 스틱 상하 반전
+#@ fdafe205 mt: Left Stick Dead Zone {value}
+controller.setting.left_dead_zone = 왼쪽 스틱 데드존 {value}
+#@ fdc42ecf mt: Target Lock
+controller.setting.lock = 대상 고정
+#@ ff943461 mt: Button Names
+controller.setting.prompts = 버튼 이름
+#@ 3239c498 mt: Right Stick Dead Zone {value}
+controller.setting.right_dead_zone = 오른쪽 스틱 데드존 {value}
+#@ 3abf931c mt: Rumble (when hurt and on a level up)
+controller.setting.rumble = 진동 (피해를 입을 때와 레벨 업)
+#@ 228bfdd5 mt: Run From a Lean of {value}
+controller.setting.run = {value} 기울이면 달리기
+#@ 93b5ca6d mt: Play With
+controller.setting.use = 플레이 방식
+#@ 5acb3098 mt: Show the {button} Layer
+controller.show_layer = {button} 레이어 보기
+#@ 014251c6 mt: Buttons
+controller.tab.buttons = 버튼
+#@ 4b058728 mt: Settings
+controller.tab.settings = 설정
+#@ 290fb48a mt: How strongly attacks and spells turn to the enemy you aim\nnear. Other players get only a light pull at any setting.
+controller.tip.aim_assist = 공격과 주문이 조준 근처의 적에게 얼마나 강하게\n향하는지. 다른 플레이어에게는 어떤 설정에서도 약하게만 끌립니다.
+#@ a3d002b1 mt: How far the stick must lean before it counts.\nRaise it if the player creeps or the aim drifts\nwith the stick let go.
+controller.tip.dead_zone = 스틱이 반응하기 전까지 기울여야 하는 정도.\n스틱을 놓았는데 캐릭터가 움직이거나 조준이\n흐르면 높이세요.
+#@ f64dc3eb mt: Kept While Held: the target stays while the attack or spell\nbutton is held. Picked Again: the best target as you turn.
+controller.tip.lock = 누르는 동안 유지: 공격이나 주문 버튼을 누르는 동안\n대상이 유지됩니다. 다시 선택: 돌 때마다 가장 좋은 대상.
+#@ ad7275d7 mt: The names and symbols shown for the buttons, on this\nscreen and on the spell bar: as the connected controller's,\nor always one family's.
+controller.tip.prompts = 이 화면과 주문 막대에 표시되는 버튼의 이름과\n기호: 연결된 컨트롤러에 맞추거나\n항상 한 계열로.
+#@ ec799022 mt: How far the left stick leans before the player runs\n(less than that walks, as a near mouse pointer does).
+controller.tip.run = 캐릭터가 달리기 시작하는 왼쪽 스틱의 기울기\n(그보다 적으면 걷기, 마우스 포인터가 가까울 때처럼).
+#@ b236dfd3 mt: What you play with. Controller: the mouse is ignored and\nits pointer hidden. Mouse and Keyboard: the controller is\nignored. Asked at each start while a controller is connected.
+controller.tip.use = 무엇으로 플레이할지 정합니다. 컨트롤러: 마우스는 무시되고\n포인터가 숨겨집니다. 마우스와 키보드: 컨트롤러는\n무시됩니다. 컨트롤러가 연결되어 있으면 시작할 때마다 묻습니다.
+#@ a15e8ea1 mt: Controller
+controller.title = 컨트롤러
 
 #@ 0fc035e3 mt: Add to Category
 editor.browser.add_to_category = 분류에 추가
@@ -6378,6 +6572,8 @@ editor.script.info.values = 값
 editor.script.info.values_heading = 값
 #@ 66888ba5 mt: Go to the list of every value its parameters accept (also offered as you type the argument, or with Ctrl+Space).
 editor.script.info.values_help = 매개변수가 받는 모든 값의 목록으로 이동합니다(인수를 입력할 때나 Ctrl+Space로도 제시됨).
+#@ 481780fb mt: the sidecar's mark of the language version the source was saved in ({mark}) isn't a number: the source is shown as saved, not turned round for the old argument order (a call's first argument to the function's last parameter); if it was written for that order, its calls of the script's own functions with two or more arguments now bind the other way round, so check them before compiling
+editor.script.migrated.bad_mark = 사이드카에 기록된, 소스가 저장된 언어 버전 표시({mark})가 숫자가 아닙니다: 소스는 저장된 그대로 표시되며 예전 인수 순서(호출의 첫 인수가 함수의 마지막 매개변수로 감)에 맞춰 뒤집지 않았습니다. 그 순서로 작성되었다면 인수가 둘 이상인 스크립트 자체 함수 호출은 이제 반대로 연결되므로 컴파일하기 전에 확인하세요
 #@ bd471e0b mt: the saved source was written for the old argument order (a call's first argument went to the function's last parameter), and it couldn't be turned round to give the same compiled script: it is shown as saved, so its calls of the script's own functions with two or more arguments now bind the other way round; check them before compiling
 editor.script.migrated.failed = 저장된 소스는 예전 인수 순서(호출의 첫 인수가 함수의 마지막 매개변수로 감)로 작성되었고, 같은 컴파일 결과가 나오도록 뒤집을 수 없었습니다: 저장된 그대로 표시되므로 인수가 둘 이상인 스크립트 자체 함수 호출은 이제 반대로 연결됩니다. 컴파일하기 전에 확인하세요
 #@ ffd74351 mt: the saved source was written for the old argument order (a call's first argument went to the function's last parameter): {n} call of the script's own functions now has its arguments turned round to read in parameter order; it compiles to the same bytes | the saved source was written for the old argument order (a call's first argument went to the function's last parameter): {n} calls of the script's own functions now have their arguments turned round to read in parameter order; they compile to the same bytes
@@ -8183,6 +8379,46 @@ game.map_vote.title_called = 맵 투표: 과반수가 찬성하면 지금 맵이
 game.map_vote.title_next = 다음 맵 투표
 #@ a69381cf mt: {n} vote | {n} votes
 game.map_vote.votes[other] = {n}표
+#@ a0b1ed5e mt: Bottom button
+game.pad.button.bottom = 아래 버튼
+#@ 812746a9 mt: Circle
+game.pad.button.circle = 원
+#@ b663d53b mt: Cross
+game.pad.button.cross = 엑스
+#@ febc3941 mt: D-pad Down
+game.pad.button.dpad_down = 방향 패드 아래
+#@ bc6967dc mt: D-pad Left
+game.pad.button.dpad_left = 방향 패드 왼쪽
+#@ 1d3b4229 mt: D-pad Right
+game.pad.button.dpad_right = 방향 패드 오른쪽
+#@ cf7627b4 mt: D-pad Up
+game.pad.button.dpad_up = 방향 패드 위
+#@ 8ec7c5a4 mt: Left button
+game.pad.button.left = 왼쪽 버튼
+#@ f4a72e6f mt: Right button
+game.pad.button.right = 오른쪽 버튼
+#@ fac98c66 mt: Square
+game.pad.button.square = 네모
+#@ 4db8edf0 mt: Top button
+game.pad.button.top = 위 버튼
+#@ e58886a5 mt: Triangle
+game.pad.button.triangle = 세모
+#@ 35afca3b mt: Cancel
+game.pad.prompt.cancel = 취소
+#@ 7f2c2a34 mt: Move
+game.pad.prompt.move = 이동
+#@ 5b12cc35 mt: Pick up
+game.pad.prompt.pickup = 줍기
+#@ 9ad2489c mt: Place
+game.pad.prompt.place = 놓기
+#@ 21a5901d mt: Remove
+game.pad.prompt.remove = 제거
+#@ 96d3996f mt: Talk
+game.pad.prompt.talk = 대화
+#@ f6f1dff9 mt: Trade
+game.pad.prompt.trade = 거래
+#@ ba1c5c94 mt: Use
+game.pad.prompt.use = 사용
 #@ 67a1e1af mt: Vote Map
 game.quit_menu.vote_map = 맵 투표
 #@ 1c3df593 mt: screenshot: couldn't write {path}
@@ -8194,6 +8430,17 @@ game.screenshot.saved = 스크린샷: {path}
 hud.quickbar.spell_set = 주문 세트 {n}
 #@ f7fa068e mt: Trap Set {n}
 hud.quickbar.trap_set = 함정 세트 {n}
+
+#@ a15e8ea1 mt: Controller
+input_mode.controller = 컨트롤러
+#@ 0f61c058 mt: A game controller is connected: open the game's menu to choose it.
+input_mode.later = 게임 컨트롤러가 연결되었습니다: 선택하려면 게임 메뉴를 여세요.
+#@ 3265ecc6 mt: Mouse and Keyboard
+input_mode.mouse = 마우스와 키보드
+#@ 7bed204a mt: A game controller is connected. Which will you play with?
+input_mode.text = 게임 컨트롤러가 연결되었습니다. 무엇으로 플레이하시겠습니까?
+#@ 36e491e1 mt: Game Controller
+input_mode.title = 게임 컨트롤러
 
 #@ 37c3069e mt: ping {to}: {error}
 lobby.browser.ping_failed = 핑 {to}: {error}
@@ -8680,6 +8927,8 @@ modes.tide.strip.slain = {n} 처치
 #@ 65b80e99 mt: Stage {n}
 modes.tide.strip.stage = 스테이지 {n}
 
+#@ a15e8ea1 mt: Controller
+options.controller = 컨트롤러
 #@ 3d2aca78 mt: Fullscreen
 options.display.fullscreen = 전체 화면
 #@ 07ac0fc5 mt: Fullscreen Windowed
@@ -8712,8 +8961,8 @@ options.switch.exact_maths = 원작 계산 그대로
 options.switch.frame_rate = 프레임 레이트
 #@ 406cb922 mt: Use HD Images
 options.switch.hd_images = HD 이미지 사용
-#@ ef5d3c23 mt: HD Spell FX
-options.switch.hd_spell_fx = HD 주문 효과
+#@ b1f4af7d mt: HD FX
+options.switch.hd_spell_fx = HD 효과
 #@ 1c97fc67 mt: Kill Feed
 options.switch.kill_feed = 킬 피드
 #@ f25d4a26 mt: Win Mouse Accel
@@ -8722,8 +8971,8 @@ options.switch.mouse_accel = Windows 마우스 가속
 options.switch.original_fonts = 원작 스타일 글꼴
 #@ 32e553bf mt: Pixel Light
 options.switch.pixel_light = 픽셀 조명
-#@ e88c25fb mt: Smooth FX
-options.switch.smooth_fx = 부드러운 효과
+#@ 640ca085 mt: Smooth Spell FX
+options.switch.smooth_fx = 부드러운 주문 효과
 #@ 2c8815e6 mt: VSync
 options.switch.vsync = 수직 동기화
 #@ 5561fd0b mt: General
@@ -8746,8 +8995,8 @@ options.tip.exact_maths = 게임의 계산을 원작 게임과 똑같이 반올�
 options.tip.frame_rate = 오른쪽 위에 프레임 레이트와 프레임 시간을 표시합니다\n(움직임 보정 사용 시 그 지연 시간도).
 #@ f4b2b42c mt: Images from the HD image pack (video_hd.nxp) where it has them.\n- Greyed without a pack.
 options.tip.hd_images = HD 이미지 팩(video_hd.nxp)에 있는 이미지를 사용합니다.\n- 팩이 없으면 비활성화됩니다.
-#@ 52215f90 mt: Spells drawn anew in place of the original's sprites:\nthe poison cloud as soft billowing clouds and Force Field\nas a glass barrier, smooth at your screen's resolution.\n+ Detailed spell effects at any zoom.\n- Off: the original's sprites.\nSparks, rays and glows are Smooth FX (on the General page).
-options.tip.hd_spell_fx = 원작의 스프라이트 대신 새로 그린 주문 효과:\n독구름은 부드럽게 피어오르는 구름으로, 역장은\n유리 장벽으로, 화면 해상도에 맞춰 매끄럽게 그립니다.\n+ 어떤 확대 배율에서도 세밀한 주문 효과.\n- 끄면: 원작의 스프라이트.\n불꽃, 광선, 빛은 부드러운 효과(일반 탭)에 있습니다.
+#@ 1a1bdd28 mt: Spells drawn anew in place of the original's sprites:\nthe poison cloud as soft billowing clouds and Force Field\nas a glass barrier, smooth at your screen's resolution.\nWater as a moving surface over the original's murk, with\nripples where things wade and splashes where they land.\n+ Detailed spell effects and water at any zoom.\n- Off: the original's sprites and water.\nSparks, rays and glows are Smooth Spell FX (on the General page).
+options.tip.hd_spell_fx = 원작의 스프라이트 대신 새로 그린 주문 효과:\n독구름은 부드럽게 피어오르는 구름으로, 역장은\n유리 장벽으로, 화면 해상도에 맞춰 매끄럽게 그립니다.\n물은 원작의 탁한 물 위로 움직이는 수면으로 그리며,\n무언가 지나가면 물결이, 떨어지면 물보라가 입니다.\n+ 어떤 확대 배율에서도 세밀한 주문 효과와 물.\n- 끄면: 원작의 스프라이트와 물.\n불꽃, 광선, 빛은 부드러운 주문 효과(일반 탭)에 있습니다.
 #@ 35ed71be mt: Who killed whom and with what, centred at the top of the\nscreen for a few seconds, as the original shows it.\nOff: in the console only.
 options.tip.kill_feed = 누가 누구를 무엇으로 처치했는지 화면 위쪽 가운데에\n몇 초 동안 원작처럼 표시합니다.\n끄면: 콘솔에만 표시.
 #@ 8a4df3f1 mt: Windows' pointer speed and acceleration (Enhance Pointer\nPrecision) on the mouse's raw movement.\nOff: the raw movement alone, one count a game pixel,\nas the original read it (at Mouse x1.00).
@@ -8758,8 +9007,8 @@ options.tip.mouse_speed = 커서 이동 속도: x0.25~x3. x1.00이면 마우스 
 options.tip.original_fonts = 게임 텍스트를 Nox 스타일 글꼴로 표시합니다: 원작의 글자를\nHD 이미지 사용 시 매끄럽게 그립니다.\n끄면: 책 글꼴인 Caudex와, 부족한 문자는 Noto Sans.
 #@ 46422cf8 mt: Lights shade every pixel, smoothly.\n+ Smooth lighting with no blocky edges.\n- Off: the original's coarser light grid.
 options.tip.pixel_light = 조명이 모든 픽셀을 매끄럽게 비춥니다.\n+ 계단 현상 없는 부드러운 조명.\n- 끄면: 원작의 거친 조명 격자.
-#@ 1f3e7699 mt: Sparks, rays, glows, lines and dots drawn smooth at\nyour screen's resolution, and a smoke blast as soft dust.\n+ Cleaner sparks, rays and glows.\n- Off: the original's pixel shapes.\nThe poison cloud and Force Field are HD Spell FX\n(on the More page).
-options.tip.smooth_fx = 불꽃, 광선, 빛, 선, 점을 화면 해상도에 맞춰\n매끄럽게 그리고, 연기 폭발은 부드러운 먼지로 그립니다.\n+ 더 깔끔한 불꽃, 광선, 빛.\n- 끄면: 원작의 픽셀 모양.\n독구름과 역장은 HD 주문 효과에 있습니다\n(기타 탭).
+#@ a39596a7 mt: Sparks, rays, glows, lines and dots drawn smooth at\nyour screen's resolution, and a smoke blast as soft dust.\n+ Cleaner sparks, rays and glows.\n- Off: the original's pixel shapes.\nThe poison cloud and Force Field are HD FX\n(on the More page).
+options.tip.smooth_fx = 불꽃, 광선, 빛, 선, 점을 화면 해상도에 맞춰\n매끄럽게 그리고, 연기 폭발은 부드러운 먼지로 그립니다.\n+ 더 깔끔한 불꽃, 광선, 빛.\n- 끄면: 원작의 픽셀 모양.\n독구름과 역장은 HD 효과에 있습니다\n(기타 탭).
 #@ fa78311a mt: How movement between the server's 30 updates a second is drawn.\nOff: in the server's 30 steps a second, at your frame rate.\nSmooth Movement: each step spread over the frames between updates.\nSmooth Network: everything drawn between updates (adds latency).\nMatch Server: follow server updates; normally 60 FPS in solo play.
 options.tip.smoothing = 서버의 초당 30회 업데이트 사이의 움직임을 그리는 방식.\n끔: 서버의 초당 30단계 그대로, 내 프레임 레이트로 그림.\n부드러운 이동: 각 단계를 업데이트 사이의 프레임에 나눠 그림.\n부드러운 네트워크: 업데이트 사이의 모든 것을 그림(지연 추가).\n서버에 맞춤: 서버 업데이트를 따름. 솔로 플레이에서는 보통 60 FPS.
 #@ 714d178d mt: Match Server: normally a 60 FPS lock in single-player.\nNo interpolation. Draw when a server update arrives,\nincluding extra movement updates (30-120 per second).\nMenus use their normal frame rate.
@@ -8772,8 +9021,8 @@ options.tip.smoothing_network = 부드러운 네트워크: 보이는 모든 것�
 options.tip.smoothing_off = 끔: 모든 것을 서버가 마지막으로 알려 준 위치에\n초당 30단계로, 추가 지연 없이 그립니다.\n- 30 FPS를 넘으면 단계가 고르지 않게 보일 수 있습니다.
 #@ 6c5b4e7e mt: The everyday settings.
 options.tip.tab_general = 자주 쓰는 설정.
-#@ 424bf6d7 mt: Settings seldom changed: the line of sight's soft edge,\nFade Objects, the HUD, the frame-rate counter, HD Spell FX,\nthe original's exact maths for games you host, the\nweather effects and the original style fonts.
-options.tip.tab_more = 자주 바꾸지 않는 설정: 시야의 부드러운 경계,\n오브젝트 흐리게, HUD, 프레임 레이트 표시, HD 주문 효과,\n호스팅하는 게임의 원작 계산 그대로,\n날씨 효과, 원작 스타일 글꼴.
+#@ 8562dc65 mt: Settings seldom changed: the line of sight's soft edge,\nFade Objects, the HUD, the frame-rate counter, HD FX,\nthe original's exact maths for games you host, the\nweather effects and the original style fonts.
+options.tip.tab_more = 자주 바꾸지 않는 설정: 시야의 부드러운 경계,\n오브젝트 흐리게, HUD, 프레임 레이트 표시, HD 효과,\n호스팅하는 게임의 원작 계산 그대로,\n날씨 효과, 원작 스타일 글꼴.
 #@ 5806ae43 mt: Frames wait for the screen's refresh.\n+ No tearing.\n- Up to a refresh's more latency.\nOff: as many frames as the computer can draw.
 options.tip.vsync = 프레임이 화면 새로 고침을 기다립니다.\n+ 화면 찢김 없음.\n- 최대 한 번의 새로 고침만큼 지연이 늘어납니다.\n끄면: 컴퓨터가 그릴 수 있는 만큼 프레임을 그립니다.
 #@ b33f1db0 mt: Rain, snow, storms and wind that a mod's game turns on,\ndrawn over the world (they never change the game).\n- Greyed without the GPU renderer.
@@ -8790,6 +9039,63 @@ options.weather.off = 끔
 options.weather.on = 켬
 #@ 8dc6c6d9 mt: Reduced
 options.weather.reduced = 줄임
+
+#@ 2bf1f0ff mt: caps lock
+osk.hint.caps = 대문자 고정
+#@ 27cb3b23 mt: close
+osk.hint.close = 닫기
+#@ 67c2444a mt: delete
+osk.hint.delete = 지우기
+#@ ddfde10d mt: enter
+osk.hint.enter = 엔터
+#@ 236bc992 mt: quick chat
+osk.hint.quick = 빠른 채팅
+#@ 54019347 mt: shift
+osk.hint.shift = Shift
+#@ 3553e285 mt: space
+osk.hint.space = 띄어쓰기
+#@ 5127f14d mt: type
+osk.hint.type = 입력
+#@ cd86acc3 mt: Close
+osk.key.close = 닫기
+#@ 5797ea6a mt: Delete
+osk.key.delete = 지우기
+#@ aff863ad mt: Enter
+osk.key.enter = 엔터
+#@ 9cf5355c mt: Quick
+osk.key.quick = 채팅
+#@ f9bd04e7 mt: Shift
+osk.key.shift = Shift
+#@ c1c43225 mt: Space
+osk.key.space = 스페이스
+#@ ec928265 mt: Follow me!
+osk.quick.follow = 따라와!
+#@ 3a206ab3 mt: gg
+osk.quick.gg = gg
+#@ dba12ce1 mt: Help!
+osk.quick.help = 도와줘!
+#@ 325d0001 mt: Hi!
+osk.quick.hi = 안녕!
+#@ 393fd21b mt: (Laugh)
+osk.quick.laugh = (웃기)
+#@ d6475888 mt: Good luck!
+osk.quick.luck = 행운을 빌어!
+#@ fcbd4f0b mt: Nice one!
+osk.quick.nice = 나이스!
+#@ 85e4b82f mt: OK
+osk.quick.ok = OK
+#@ 9a3274d2 mt: (Point)
+osk.quick.point = (가리키기)
+#@ 62558b51 mt: Sorry!
+osk.quick.sorry = 미안!
+#@ be3160cc mt: (Taunt)
+osk.quick.taunt = (도발)
+#@ d3a24563 mt: Thanks!
+osk.quick.thanks = 고마워!
+#@ 618d1132 mt: Quick chat
+osk.quick.title = 빠른 채팅
+#@ 8151f533 mt: Wait!
+osk.quick.wait = 기다려!
 
 #@ db79a3a6 mt: {map} uses memory tricks of the original game that NoX Core does not run. Look for a NoX Core version of it.
 script.memory_tricks = {map}은(는) NoX Core가 실행하지 않는 원작 게임의 메모리 트릭을 씁니다. 이 맵의 NoX Core 버전을 찾아보세요.

@@ -5,7 +5,9 @@
 //            from its ZSIZE bottom to its top: it's hit inside the footprint at either level, or
 //            between the two levels within its sideways span. In whole world units: the cursor's
 //            point and the thing's spot whole, the levels, the radius and the box's corners cut
-//            toward zero.
+//            toward zero. A type whose thing.bin record has no ZSIZE line stands 0 to 30
+//            (nox::things::thingZSize): the NPC, the Wizard and the other creatures without one
+//            are hit up their bodies, not only at their feet.
 //   picks    of the things hit, the one furthest forward (y + z + ZSIZE bottom, whole units; 0 or
 //            less never) wins, the first one offered on a tie. Two picks are kept: the front one
 //            (the ring at its feet, the arrow's colour, the aim and the spells' target) and the
@@ -21,10 +23,35 @@
 //            solo game's pause) or our player is dying or dead: the move cursor stays.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
+#include <string_view>
+
+namespace nox::things {
+struct ThingDef;
+}
 
 namespace noxsdl::pick {
+
+/// A thing.bin record's EXTENT line, read in one place for all that use it. The hover's shape, as
+/// the game's client thing reader reads it: a line starting with CIRCLE is a circle and one
+/// starting with BOX a box ("CIRCLES 9" is a circle of 9; CENTER, NULL, any other: none), its
+/// decimals after the first word (any white space ends it), each as strtof reads it, 0 from the
+/// first that doesn't read. The drawing's extent (TypeArt's): the word before the first space,
+/// CIRCLE or BOX whole, and its whole numbers (each a run of spaces or tabs then an integer, 0
+/// from the first that isn't one, so "12.5 20" reads 12 0).
+struct Extent {
+    enum class Kind : std::uint8_t { None, Circle, Box };
+    Kind kind = Kind::None;      ///< the drawing's
+    Kind hoverKind = Kind::None; ///< the hover's (the game's reader)
+    bool spaced = false;         ///< a space after the drawing's word (without, no numbers: TypeArt takes no extent)
+    std::array<float, 2> size{}; ///< decimals (the hover's)
+    std::array<int, 2> whole{};  ///< whole numbers
+};
+Extent readExtent(std::string_view line);
+/// The record's last EXTENT line read (readExtent); nullopt without one.
+std::optional<Extent> extentOf(const nox::things::ThingDef& def);
 
 /// A thing's hover shape: thing.bin's EXTENT and ZSIZE.
 struct Shape {
@@ -35,6 +62,14 @@ struct Shape {
     float zMin = 0;     ///< ZSIZE's bottom
     float zMax = 0;     ///< ZSIZE's top
 };
+
+/// A thing type's hover shape from its thing.bin record: the last EXTENT line's CIRCLE r or BOX
+/// w h as Extent's hover reads them (radius, width and height as decimals; CENTER, NULL or none:
+/// no shape, never hit),
+/// and its ZSIZE as nox::things::thingZSize gives it (0 to 30 without a ZSIZE line).
+Shape shapeOf(const nox::things::ThingDef& def);
+/// The same with its EXTENT read already (extentOf).
+Shape shapeOf(const nox::things::ThingDef& def, const std::optional<Extent>& extent);
 
 /// Whether world point (cx, cy) is on a thing standing at (x, y), at height z.
 bool under(const Shape& shape, int x, int y, int z, int cx, int cy);

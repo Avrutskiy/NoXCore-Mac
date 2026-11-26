@@ -1,7 +1,8 @@
 // The maps a NoX Core mode ships with it (a mod's maps\<Name>\<Name>.map, beside its mode.json),
 // read once when the mode is: a game of that mode finds its maps there before the game's maps
 // folder (GameHost::Options::modeMaps, GameHost::findMap). No other game sees them, solo games
-// included: only a host that hosts the mode hands its options the index. The one other index is
+// included: only a host that hosts the mode hands its options the index (save the host console's
+// load of a name no other place has, which looks in every installed mod's: VD-80). The one other index is
 // noxsdl's ordinary network host's: the map editor's folder, read once when the host is made
 // (LocalHost, HostSettings::authoredMapsDir), so a map authored there is hosted, listed and sent
 // to guests by its name.
@@ -46,5 +47,10 @@ private:
     std::vector<Entry> entries_; ///< (sorted by lower-case name: find's binary search)
     std::vector<std::string> keys_; ///< (each entry's name in lower case)
 };
+
+/// Whether `name` (a map's folder name) is a solo map's: wiz, war or con (any case), then a digit.
+/// The game's map lists leave such a name out (GameHost's scan of the maps folder, a mode's own
+/// maps alike), so the map editor saves under none.
+bool isSoloMapName(std::string_view name) noexcept;
 
 } // namespace nox::server

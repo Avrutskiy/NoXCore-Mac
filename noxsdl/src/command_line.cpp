@@ -1,6 +1,7 @@
 // The command line (command_line.hpp).
 #include "command_line.hpp"
 
+#include "campaign_mod.hpp"
 #include "log_output.hpp"
 #include "mods_folder.hpp"
 
@@ -58,6 +59,20 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
             return *opts.hostSettings;
         };
         // (outside the chain below, which is at the compiler's nesting limit)
+        if (a == "--pad-script") {
+            app.padScript = parsePadScript(next()); // (noxcpp) a made-up pad's steps (App::ScriptedPad)
+            continue;
+        }
+        if (a == "--input-mode") {
+            // (noxcpp, tests) pad / mouse: that input mode, not asked; ask: asked even in a test run
+            const std::string_view m = next();
+            if (m == "ask") {
+                app.padModeAskForced = true;
+            } else {
+                app.padModeForced = m == "pad" ? pad::InputDevice::Pad : pad::InputDevice::MouseKeyboard;
+            }
+            continue;
+        }
         if (a == "--fake-dialog-text") {
             app.fakeScreen = 2; // --fake-dialog with this string id's line (tests)
             app.fakeDialogText = next();
@@ -82,7 +97,7 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
             // Tests: --host-coop with mod ID's campaign (its row's Campaign choice), from its first map.
             hosting().solo = true;
             app.hostSoloScreensTest = "coop";
-            app.hostCoopCampaignTest = next();
+            app.hostCoopCampaignTest = typedCampaignId(next()); // (as typed, in any case: a mod's id is lowercase)
             if (opts.hostSettings->map == "Estate") {
                 opts.hostSettings->map.clear();
             }
@@ -249,8 +264,17 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
             opts.useGpu = true;
         } else if (a == "--no-gpu") {
             opts.useGpu = false;
-        } else if (a == "--stock-effects") {
-            opts.stockEffects = true;
+        } else if (a == "--stock-effects" || a == "--hd-spell-fx" || a == "--water-demo") {
+            // (One branch: the chain is as deep as the compiler takes.) --hd-spell-fx: Options'
+            // HD Spell FX on for this run (unless --stock-effects). --water-demo (the viewer,
+            // tests): made-up things wading, flying and falling into the water by the view's middle,
+            // through HD water's ripple feed (feedWaterRipples).
+            if (a == "--water-demo") {
+                app.waterDemo = true;
+                opts.hdSpellFx = true;
+            } else {
+                (a == "--stock-effects" ? opts.stockEffects : opts.hdSpellFx) = true;
+            }
         } else if (a == "--no-bloom") {
             opts.noBloom = true;
         } else if (a == "--no-smooth-motion") {
@@ -303,8 +327,10 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
         } else if (a == "--gpu-driver") {
             opts.useGpu = true;
             opts.gpuDriver = next();
-        } else if (a == "--open-inventory") {
-            app.openInventory = true;
+        } else if (a == "--open-inventory" || a == "--open-controller") {
+            // (one branch: the chain is as deep as the compiler takes; --open-controller: (noxcpp) the
+            // Controller screen once in the game)
+            (a == "--open-inventory" ? app.openInventory : app.openController) = true;
         } else if (a == "--open-book") {
             // the book once in the game; with a number, turned to that entry's page
             app.openBook = i + 1 < argc && std::isdigit(static_cast<unsigned char>(argv[i + 1][0]))
@@ -405,8 +431,15 @@ StartOptions parseCommandLine(App& app, int argc, char* argv[])
 #endif
         } else if (a == "--sight") {
             app.lineOfSight = true; // line of sight from the camera centre, in the viewer too
-        } else if (a == "--shot-after") {
-            app.shotAfterSeconds = std::strtof(next(), nullptr);
+        } else if (a == "--shot-after" || a == "--shot-sequence") {
+            // (One branch: the chain is as deep as the compiler takes.) --shot-sequence N STEP:
+            // N shots STEP seconds apart (tests: an animation's frames).
+            if (a == "--shot-after") {
+                app.shotAfterSeconds = std::strtof(next(), nullptr);
+            } else {
+                app.shotSequence = std::clamp(std::atoi(next()), 1, 1000);
+                app.shotStep = std::max(0.0f, std::strtof(next(), nullptr));
+            }
         } else if (a == "--connect") {
             opts.connect = next();
         } else if (a == "--name") {

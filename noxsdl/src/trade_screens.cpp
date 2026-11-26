@@ -2,6 +2,7 @@
 // from their .wnd files, kept in step with the client's World each frame.
 #include "trade_screens.hpp"
 
+#include "gui_focus_frame.hpp"
 #include "hud.hpp"
 #include "trade_place.hpp"
 
@@ -190,6 +191,12 @@ TradeScreens::TradeScreens(gui::Resources res, std::filesystem::path windowDir, 
                         p.text(std::to_string(s.price), x, y - fh + 45, false, kYellow);
                     }
                 }
+                // (noxcpp) The game controller's cell, while its focus is in the stock.
+                if (gui_.navFocus() == &self && hasPad() && gui::navPadInUse()) {
+                    const int x = r.x + (padStock_ / 10) * kCell;
+                    const int y = r.y + (padStock_ % 10) * kCell - shop_.scroll;
+                    gui::drawFocusFrame(p.renderer(), p.toOutput(x + 2, y + 2, kCell - 4, kCell - 4), p.scale());
+                }
                 SDL_SetRenderClipRect(renderer, nullptr);
             };
         }
@@ -214,6 +221,10 @@ TradeScreens::TradeScreens(gui::Resources res, std::filesystem::path windowDir, 
                 const int range = sl ? std::max(1, sl->max - sl->min) : 1;
                 list->scroll = most * (range - (from.sliderValue - (sl ? sl->min : 0))) / range;
             }
+            return true;
+        }
+        if (message == gui::PadScrolled && from.id == kDlgList) {
+            scrollDialog(from.scroll); // ((noxcpp) the pad scrolled the words: the slider with them)
             return true;
         }
         if (message != gui::Clicked) {
@@ -389,6 +400,239 @@ TradeScreens::TradeScreens(gui::Resources res, std::filesystem::path windowDir, 
         };
         amountWindow_->show(false);
     }
+    padWindows();
+}
+
+// ------------------------------------------------------------------- the game controller
+
+void TradeScreens::padWindows()
+{
+    // Every button of the shop, the dialog and the trade: at its window's edge the pad may go on to
+    // the panels' snap cursor (the inventory over them). The shop's stock and the trade's offers:
+    // the focus goes into them and steps through their cells.
+    const auto edges = [this](gui::Window* top) {
+        if (!top) {
+            return;
+        }
+        const auto walk = [this](auto& self, gui::Window& w) -> void {
+            if (w.type == nox::gui::WindowType::PushButton && !w.padInput) {
+                w.padInput = [this](gui::Window& f, gui::NavInput in) { return padEdge(f, in); };
+            }
+            for (auto& c : w.children) {
+                self(self, *c);
+            }
+        };
+        walk(walk, *top);
+    };
+    edges(shop_.window);
+    edges(dialog_.window);
+    edges(trade_.window);
+    // The dialog's words are read, not chosen: the pad scrolls them (up / down past the answers, the
+    // right stick), so its scroll arrows aren't stops; nor are the stock's (the cells scroll it).
+    if (dialog_.window) {
+        if (gui::Window* list = dialog_.window->find(kDlgList)) {
+            list->navText = true;
+        }
+    }
+    for (gui::Window* w : {dialog_.window ? dialog_.window->find(kDlgUp) : nullptr, dialog_.window ? dialog_.window->find(kDlgDown) : nullptr,
+                           shop_.window ? shop_.window->find(kShopUp) : nullptr, shop_.window ? shop_.window->find(kShopDown) : nullptr}) {
+        if (w) {
+            w->nav = gui::Window::Nav::Off;
+        }
+    }
+    if (gui::Window* area = shop_.window ? shop_.window->find(kShopArea) : nullptr) {
+        area->nav = gui::Window::Nav::On;
+        area->padInput = [this](gui::Window& f, gui::NavInput in) { return padStock(f, in); };
+    }
+    for (const bool ours : {true, false}) {
+        if (gui::Window* offer = trade_.window ? trade_.window->find(ours ? kTrdOurs : kTrdTheirs) : nullptr) {
+            offer->nav = gui::Window::Nav::On;
+            offer->padInput = [this, ours](gui::Window& f, gui::NavInput in) { return padOffer(f, in, ours); };
+        }
+    }
+}
+
+SDL_FRect TradeScreens::toOutput(SDL_Rect r, int w, int h) const
+{
+    // (the placement's scale and corner, read back from two of its points)
+    const SDL_FPoint a = gui_.layoutPoint(0, 0, w, h);
+    const SDL_FPoint b = gui_.layoutPoint(100, 100, w, h);
+    const float sx = b.x != a.x ? 100 / (b.x - a.x) : 1;
+    const float sy = b.y != a.y ? 100 / (b.y - a.y) : 1;
+    return {(static_cast<float>(r.x) - a.x) * sx, (static_cast<float>(r.y) - a.y) * sy, static_cast<float>(r.w) * sx,
+            static_cast<float>(r.h) * sy};
+}
+
+bool TradeScreens::padEdge(gui::Window& self, gui::NavInput in, std::optional<SDL_Rect> cell)
+{
+    if (in == gui::NavInput::Accept || in == gui::NavInput::TabPrevious || in == gui::NavInput::TabNext || !actions_.padLeave ||
+        amount_ || messageBox_) {
+        return false;
+    }
+    // Something more of these windows that way (the right stick's jump: of another group than
+    // ours): the window system's own step.
+    const bool jump = gui::isJump(in);
+    const gui::NavInput way = gui::jumpWay(in);
+    const gui::Window* group = gui::navGroup(self);
+    gui::Window* top = &self;
+    while (top->parent) {
+        top = top->parent;
+    }
+    std::vector<SDL_Rect> others;
+    std::vector<gui::Window*> windows;
+    const auto walk = [&](auto& walkSelf, gui::Window& w) -> void {
+        if (w.hidden() || !w.enabled() || w.nav == gui::Window::Nav::Off) {
+            return;
+        }
+        if (&w != &self && gui::navKind(w) && w.rect.w > 0 && w.rect.h > 0 && (!jump || gui::navGroup(w) != group)) {
+            others.push_back(gui::screenRect(w));
+            windows.push_back(&w);
+        }
+        for (const auto& c : w.children) {
+            walkSelf(walkSelf, *c);
+        }
+    };
+    walk(walk, *top);
+    const SDL_Rect from = cell ? *cell : gui::screenRect(self);
+    if (const int next = gui::pickInDirection(from, others, way); next >= 0) {
+        if (!cell) {
+            return false;
+        }
+        gui_.padFocus(windows[static_cast<std::size_t>(next)]); // (from the cell, not the whole area's middle)
+        return true;
+    }
+    return actions_.padLeave(way, toOutput(from, lastW_, lastH_));
+}
+
+bool TradeScreens::padStock(gui::Window& self, gui::NavInput in)
+{
+    if (!shop_.open || shop_.mode != 2) {
+        return padEdge(self, in); // (the greeting's or a mode's text: a button's way)
+    }
+    const SDL_Rect r = rectOf(&self);
+    const int shown = std::max(1, r.h / kCell);
+    int col = padStock_ / 10;
+    int row = padStock_ % 10;
+    // The rows with stock (and the first): the cursor goes no further down.
+    int lastRow = 0;
+    for (int i = 0; i < 60; ++i) {
+        if (!shop_.slots[static_cast<std::size_t>(i)].items.empty()) {
+            lastRow = std::max(lastRow, i % 10);
+        }
+    }
+    const SDL_Rect cell{r.x + col * kCell, r.y + row * kCell - shop_.scroll, kCell, kCell}; // (the pad's)
+    switch (in) {
+    case gui::NavInput::Accept:
+        pressStock(padStock_, SDL_FPoint{static_cast<float>(r.x + col * kCell + kCell / 2),
+                                         static_cast<float>(r.y + row * kCell - shop_.scroll + kCell / 2)});
+        return true;
+    case gui::NavInput::Left:
+        if (col == 0) {
+            return padEdge(self, in, cell);
+        }
+        --col;
+        break;
+    case gui::NavInput::Right:
+        if (col == 5) {
+            return padEdge(self, in, cell);
+        }
+        ++col;
+        break;
+    case gui::NavInput::Up:
+        if (row == 0) {
+            return padEdge(self, in, cell);
+        }
+        --row;
+        break;
+    case gui::NavInput::Down:
+        if (row >= lastRow) {
+            return padEdge(self, in, cell);
+        }
+        ++row;
+        break;
+    default:
+        return gui::isJump(in) && padEdge(self, in, cell); // (the right stick: out of the stock)
+    }
+    padStock_ = row + col * 10;
+    // Kept in view, a row's scroll at a time.
+    const int first = shop_.scroll / kCell;
+    if (row < first) {
+        scrollStock(row * kCell);
+    } else if (row >= first + shown) {
+        scrollStock((row - shown + 1) * kCell);
+    }
+    return true;
+}
+
+bool TradeScreens::padOffer(gui::Window& self, gui::NavInput in, bool ours)
+{
+    int col = padOffer_ / 2;
+    int row = padOffer_ % 2;
+    const SDL_Rect r = rectOf(&self);
+    const SDL_Rect cell{r.x + col * kCell, r.y + row * kCell, kCell, kCell}; // (the pad's)
+    switch (in) {
+    case gui::NavInput::Accept: {
+        // Ours: taken back (as a click on it); theirs: nothing.
+        const auto& s = trade_.ours[static_cast<std::size_t>(padOffer_)];
+        if (ours && !s.items.empty() && actions_.tradeWithdraw) {
+            actions_.tradeWithdraw(s.items.back());
+        }
+        return true;
+    }
+    case gui::NavInput::Left:
+        if (col == 0) {
+            return padEdge(self, in, cell);
+        }
+        --col;
+        break;
+    case gui::NavInput::Right:
+        if (col == 1) {
+            return padEdge(self, in, cell);
+        }
+        ++col;
+        break;
+    case gui::NavInput::Up:
+        if (row == 0) {
+            return padEdge(self, in, cell);
+        }
+        --row;
+        break;
+    case gui::NavInput::Down:
+        if (row == 1) {
+            return padEdge(self, in, cell);
+        }
+        ++row;
+        break;
+    default:
+        return gui::isJump(in) && padEdge(self, in, cell); // (the right stick: out of the offer)
+    }
+    padOffer_ = row + col * 2;
+    return true;
+}
+
+std::optional<SDL_FRect> TradeScreens::padBounds(int w, int h) const
+{
+    const gui::Window* win = shop_.open ? shop_.window : dialog_.open ? dialog_.window : trade_.open ? trade_.window : nullptr;
+    if (!win) {
+        return std::nullopt;
+    }
+    return toOutput(rectOf(win), w, h);
+}
+
+std::optional<SDL_FPoint> TradeScreens::padPointer(int w, int h) const
+{
+    const gui::Window* f = gui_.navFocus();
+    if (!f || !hasPad() || !anyOpen()) {
+        return std::nullopt;
+    }
+    SDL_Rect r = rectOf(f);
+    if (shop_.window && f == shop_.window->find(kShopArea) && shop_.mode == 2) {
+        r = {r.x + (padStock_ / 10) * kCell, r.y + (padStock_ % 10) * kCell - shop_.scroll, kCell, kCell};
+    } else if (trade_.window && (f == trade_.window->find(kTrdOurs) || f == trade_.window->find(kTrdTheirs))) {
+        r = {r.x + (padOffer_ / 2) * kCell, r.y + (padOffer_ % 2) * kCell, kCell, kCell};
+    }
+    const SDL_FRect o = toOutput(r, w, h);
+    return SDL_FPoint{o.x + o.w / 2, o.y + o.h / 2};
 }
 
 std::string TradeScreens::text(const std::string& id, const char* file) const
@@ -432,6 +676,11 @@ void TradeScreens::setShopMode(int mode)
     // Sell and Repair hand the inventory's clicks to the shop; Buy (and leaving
     // Repair) give them back.
     shop_.mode = mode;
+    // (noxcpp) The stock's area is the pad's only while it shows the stock; the greeting's or a
+    // mode's words are read, not chosen.
+    if (gui::Window* area = shop_.window ? shop_.window->find(kShopArea) : nullptr) {
+        area->nav = mode == 2 ? gui::Window::Nav::On : gui::Window::Nav::Off;
+    }
     inventory_.setShopMode(mode == 3   ? Inventory::ShopMode::Sell
                            : mode == 4 ? Inventory::ShopMode::Repair
                                        : Inventory::ShopMode::None);
@@ -468,6 +717,7 @@ void TradeScreens::scrollDialog(int to)
 void TradeScreens::openShop(const nox::client::World& world)
 {
     // Gui_Shop_Open.
+    padStock_ = 0;
     const auto& t = world.trade();
     // Remember the trade's event counters so only offers that arrive after opening show a box.
     shop_.open = true;
@@ -588,6 +838,47 @@ std::optional<int> TradeScreens::stockAt(SDL_FPoint l) const
     return slot;
 }
 
+bool TradeScreens::pressStock(int slot, SDL_FPoint l)
+{
+    if (slot < 0 || slot >= 60 || shop_.slots[static_cast<std::size_t>(slot)].items.empty()) {
+        return false;
+    }
+    // As many as we can pay for, else not enough gold.
+    const StockSlot& s = shop_.slots[static_cast<std::size_t>(slot)];
+    int count = static_cast<int>(s.items.size());
+    // Fewer than the whole stack when the gold doesn't cover it.
+    if (s.price != 0 && gold_ < s.price * static_cast<std::uint32_t>(count)) {
+        count = static_cast<int>(gold_ / s.price);
+    }
+    if (count == 0) {
+        notEnoughGold(s.price - gold_);
+        return true;
+    }
+    Amount a;
+    a.netCode = s.items.back();
+    a.typeId = s.typeId;
+    a.modifiers = s.modifiers;
+    a.max = count;
+    a.price = s.price;
+    a.yes = [this, nc = a.netCode, type = a.typeId](int n) {
+        // CliNet_SendShopBuyItem / BuyStack: if there's room.
+        if (actions_.canTake && !actions_.canTake(type, n)) {
+            sound(0x39D); // NoCanDo
+            if (actions_.centredMessage) {
+                actions_.centredMessage(text("pickup.c:CarryingTooMuch"));
+            }
+            return;
+        }
+        if (n == 1 && actions_.buy) {
+            actions_.buy(nc);
+        } else if (n > 1 && actions_.buyStack) {
+            actions_.buyStack(type, static_cast<std::uint8_t>(n));
+        }
+    };
+    openAmount(text("BuyLabel", "GUIShop.c"), l, std::move(a));
+    return true;
+}
+
 void TradeScreens::openDialog(const nox::client::World& world, float scale)
 {
     // Gui_NpcDialog_Open.
@@ -627,6 +918,11 @@ void TradeScreens::openDialog(const nox::client::World& world, float scale)
         done->text = text((d.flags & 2) ? "Dialog.wnd:Next" : "Dialog.wnd:Done");
     }
     dialog_.window->show(true);
+    // (noxcpp) The pad's focus starts on the first answer (Yes when asked, else Done / Next), each page.
+    if (gui::Window* first = dialog_.window->find(asks ? kDlgYes : kDlgDone)) {
+        gui_.setNavDefault(first);
+        gui_.padFocus(first);
+    }
     // The dialog takes the inventory's place on the screen.
     inventory_.close();
 }
@@ -673,6 +969,7 @@ void TradeScreens::closeDialog()
 void TradeScreens::openTrade(const nox::client::World& world)
 {
     // Gui_Trade_StartP2P.
+    padOffer_ = 0;
     trade_.open = true;
     trade_.ours = {};
     trade_.theirs = {};
@@ -1029,8 +1326,28 @@ void TradeScreens::update(const nox::client::World& world, std::uint64_t nowMs, 
 
 void TradeScreens::draw(SDL_Renderer* renderer, const nox::client::World& world, int w, int h)
 {
+    lastW_ = w;
+    lastH_ = h;
     if (!anyOpen()) {
         return;
+    }
+    // (noxcpp) The game controller's focus come into the stock or an offer: on its cell nearest the
+    // window it came from (from the right, the last column).
+    if (const gui::Window* f = gui_.navFocus(); f != padLastFocus_) {
+        if (f && padLastFocus_) {
+            const SDL_Rect from = padLastRect_;
+            const SDL_Rect to = rectOf(f);
+            const bool fromRight = from.x + from.w / 2 > to.x + to.w;
+            if (shop_.window && f == shop_.window->find(kShopArea)) {
+                padStock_ = (fromRight ? 5 : 0) * 10 + shop_.scroll / kCell;
+            } else if (trade_.window && (f == trade_.window->find(kTrdOurs) || f == trade_.window->find(kTrdTheirs))) {
+                padOffer_ = fromRight ? 2 : 0;
+            }
+        }
+        padLastFocus_ = f; // (only compared: never read through, it may be gone by the next frame)
+    }
+    if (padLastFocus_) {
+        padLastRect_ = rectOf(padLastFocus_);
     }
     if (trade_.open && trade_.window) {
         // TradeBase and its gold, the accept lights, then the offers.
@@ -1071,6 +1388,13 @@ void TradeScreens::draw(SDL_Renderer* renderer, const nox::client::World& world,
                         p.text(std::to_string(s.value), x + 5, y - fh + 45, false, kYellow);
                     }
                 }
+                // (noxcpp) The game controller's cell, while its focus is on this offer.
+                const gui::Window* pane = self.find(ours ? kTrdOurs : kTrdTheirs);
+                if (pane && gui_.navFocus() == pane && hasPad() && gui::navPadInUse()) {
+                    const int x = r.x + (padOffer_ / 2) * kCell;
+                    const int y = r.y + (padOffer_ % 2) * kCell;
+                    gui::drawFocusFrame(p.renderer(), p.toOutput(x + 2, y + 2, kCell - 4, kCell - 4), p.scale());
+                }
             }
         };
     }
@@ -1090,39 +1414,7 @@ bool TradeScreens::handleEvent(const SDL_Event& event, const nox::client::World&
             const SDL_FPoint l = gui_.layoutPoint(event.button.x, event.button.y, w, h);
             if (shop_.open && shop_.mode == 2) {
                 if (const auto slot = stockAt(l)) {
-                    // As many as we can pay for, else not enough gold.
-                    const StockSlot& s = shop_.slots[static_cast<std::size_t>(*slot)];
-                    int count = static_cast<int>(s.items.size());
-                    // Fewer than the whole stack when the gold doesn't cover it.
-                    if (s.price != 0 && gold_ < s.price * static_cast<std::uint32_t>(count)) {
-                        count = static_cast<int>(gold_ / s.price);
-                    }
-                    if (count == 0) {
-                        notEnoughGold(s.price - gold_);
-                        return true;
-                    }
-                    Amount a;
-                    a.netCode = s.items.back();
-                    a.typeId = s.typeId;
-                    a.modifiers = s.modifiers;
-                    a.max = count;
-                    a.price = s.price;
-                    a.yes = [this, nc = a.netCode, type = a.typeId](int n) {
-                        // CliNet_SendShopBuyItem / BuyStack: if there's room.
-                        if (actions_.canTake && !actions_.canTake(type, n)) {
-                            sound(0x39D); // NoCanDo
-                            if (actions_.centredMessage) {
-                                actions_.centredMessage(text("pickup.c:CarryingTooMuch"));
-                            }
-                            return;
-                        }
-                        if (n == 1 && actions_.buy) {
-                            actions_.buy(nc);
-                        } else if (n > 1 && actions_.buyStack) {
-                            actions_.buyStack(type, static_cast<std::uint8_t>(n));
-                        }
-                    };
-                    openAmount(text("BuyLabel", "GUIShop.c"), l, std::move(a));
+                    pressStock(*slot, l);
                     return true;
                 }
             }

@@ -539,8 +539,9 @@ struct ServerObject {
     /// or told to World::modeHooks for it alone. 0: none, as every object of the game's. (In the
     /// padding before `value`: the object's size is the same.)
     std::uint8_t modeEvents = 0;
-    /// noxcpp: what a mode set on it (ModeMark: nox.setDroppable). 0: nothing, as every object of
-    /// the game's. (In the same padding.)
+    /// noxcpp: what a mode set on it (ModeMark: nox.setDroppable, nox.setHealth's marks for the
+    /// co-op director). 0: nothing, as every object of the game's. Never saved. (In the same
+    /// padding.)
     std::uint8_t modeMarks = 0;
     int value = 0;           ///< its own number (a fist's or meteor's damage, a cloud's time)
     // Poison (its level; frames to its next fall, and a slowed one's; the
@@ -1885,6 +1886,9 @@ public:
     std::array<std::uint16_t, 6> lessonLimits{};
     /// Teams by clan (a chat game whose settings' clan bit is set).
     bool clanTeams = false;
+    /// The console's "cheat re-enter" (outside a network game): a player shut out of play (status
+    /// 0x100) may come back in. Never cleared: kept from map to map for the rest of the game.
+    bool reenterAllowed = false;
     /// Each mode's time limit in minutes (the same order; 0 none), and the match timer
     /// (g_gameTimerRunning, g_gameTimerEndTicks: here the frame it ends).
     std::array<std::uint8_t, 6> timeLimits{};
@@ -2205,12 +2209,15 @@ public:
     /// Loads the map's objects, walls, waypoints and groups, made as a game with `gameFlags`
     /// and `gameData` makes them; the items' modifiers by `modifiers`' names (none without).
     /// The objects take script ids from `nextScriptId` on (the exe's counter, carried from map to
-    /// map) and are put in the world at `frame` (createAt's born frame and timer). Throws on a
+    /// map) and are put in the world at `frame` (createAt's born frame and timer). `savedCopy`:
+    /// the map is a saved game's copy, read under switch-to-solo (switchToSolo set from the
+    /// start: a saved creature keeps its health, as the game's read leaves it). Throws on a
     /// malformed map.
     static World load(const map::MapFile& map, const things::ThingDb& things,
                       std::uint32_t gameFlags = GameFlag::Network | GameFlag::Arena, const things::GameData* gameData = nullptr,
                       const things::ModifierDb* modifiers = nullptr, const things::MonsterDb* monsterDb = nullptr,
-                      std::int32_t nextScriptId = kFirstScriptId, std::uint32_t frame = 0, std::vector<std::uint32_t> reserved = {});
+                      std::int32_t nextScriptId = kFirstScriptId, std::uint32_t frame = 0, std::vector<std::uint32_t> reserved = {},
+                      bool savedCopy = false);
     /// noxcpp's map editor session (server/edit_session.hpp; never in a game the exe could host):
     /// objects added to the running world exactly as the map load reads and places them (each
     /// record's object, its inventory, a client-only one not placed, a door's wall), from a

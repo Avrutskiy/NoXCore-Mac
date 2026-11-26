@@ -63,10 +63,24 @@ SDL_FPoint mousePos(const App& app)
     // input: anywhere else a stale one froze the drawn pointer (the menus' buttons still lit under
     // the real mouse).
     const bool heldShown = app.editor && app.live && (app.playTestEmbedded || app.sessionEmbedded) && !app.playTestCaptured;
-    switch (pointerSource(app.testMouse.has_value(), app.playTestMouse.has_value(), heldShown)) {
+    // (noxcpp) The game controller's pointer while it's in use in a game: in the game's pixels already.
+    const bool padPoint = app.padPlay.hasPointer && app.live && app.pads.padInUse();
+    if (!padPoint && app.pads.padInUse() && !app.testMouse && !heldShown && !app.editor && !padModeAsking(app)) {
+        // The pad's mode with no pointer of its own: where its focus is (a tooltip, a hover follow
+        // it), else nowhere on the screen; never where the mouse was left.
+        if (const gui::Gui* owner = gui::navOwner()) {
+            if (const auto p = owner->navFocusPoint(app.camera.viewWidth, app.camera.viewHeight)) {
+                return *p;
+            }
+        }
+        return SDL_FPoint{-1, -1};
+    }
+    switch (pointerSource(app.testMouse.has_value(), app.playTestMouse.has_value(), heldShown, padPoint)) {
     case PointerSource::Test:
         m = *app.testMouse;
         break;
+    case PointerSource::Pad:
+        return SDL_FPoint{app.padPlay.pointerX, app.padPlay.pointerY};
     case PointerSource::Held:
         m = *app.playTestMouse; // (a play-test in the editor's Map panel, the input the editor's: where the game had it)
         break;
@@ -192,7 +206,7 @@ bool ownDeadFlag(App& app)
 bool menuWindowUp(const App& app)
 {
     return (app.quitMenu && app.quitMenu->isOpen()) || (app.options && app.options->isOpen()) ||
-           (app.inputConfig && app.inputConfig->isOpen());
+           (app.inputConfig && app.inputConfig->isOpen()) || (app.controllerWindow && app.controllerWindow->isOpen());
 }
 
 /// A world on the view: a game's once it's in (not over a map's load), or the map viewer's.

@@ -20,7 +20,7 @@
 // --screenshot renders into a PNG and exits (in a live game, --shot-after seconds after
 // joining, then leaves) for checking the renderer headless.
 // Movies (movie_player.hpp): the menus start with the start-up's movies and legal screen, but
-// for --menu-clicks, --mouse-script and --screenshot (--startup: anyway); --no-movies plays
+// for --menu-clicks, --mouse-script, --pad-script and --screenshot (--startup: anyway); --no-movies plays
 // none, --movie NAME plays movies\NAME first, --no-hd-movies keeps to the VQAs, --hd-dir DIR
 // looks for the HD movies and FFmpeg's DLLs there instead of HDVideo\ beside the exe.
 // The log (log_output.hpp) goes to noxcore-log.txt beside the exe and to stderr. On Windows
@@ -89,6 +89,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -579,9 +580,11 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
         }
         settings.continueSlot = start.continueSlot;
         settings.characterFile = start.characterFile;
-        settings.loopbackOnly = app->hostLoopback;
-        if (app->menuHostPort != 0) {
-            settings.port = app->menuHostPort; // (--menu-host-port: tests, recordings)
+        {
+            // (--menu-host-port, --host-loopback: tests, recordings; normally the game's port.)
+            const MenuHostSocket socket = menuHostSocket({settings.port, settings.loopbackOnly}, app->menuHostPort, app->hostLoopback);
+            settings.port = socket.port;
+            settings.loopbackOnly = socket.loopbackOnly;
         }
         const bool listed = !local && !app->hostLoopback;
         try {
@@ -601,10 +604,10 @@ Menus::Callbacks menusCallbacks(App* app, const StartOptions& opts)
             return;
         }
         // (Its end back to the game list it was hosted from, as the other hosted modes'.)
-        const nox::modes::Mode* campaignMode = campaign.empty() ? nullptr : nox::modes::registry().find(campaign);
-        const std::string what = campaignMode && campaignMode->info.campaign ? campaignMode->info.campaign->title
-                                 : how.what                                 ? how.what(start.profile.playerClass)
-                                                                            : modeId;
+        const std::string campaignTitle = campaignTitleOf(campaign);
+        const std::string what = !campaignTitle.empty() ? campaignTitle
+                                 : how.what             ? how.what(start.profile.playerClass)
+                                                        : modeId;
         SDL_Log("%s: hosting %s at %s%s", how.logTag.c_str(), what.c_str(),
                 settings.map.c_str(), start.continueSlot.empty() ? "" : (", continuing " + start.continueSlot).c_str());
         SDL_Log("%s", hostListingLog(menusHostListing(*app, listed), how.logTag, app->host->port()).c_str());
@@ -767,6 +770,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
     if (app->input) {
         app->input->layoutChanged(); // (the key labels by this keyboard's layout, known now SDL's up)
     }
+    startPads(*app); // (noxcpp: the game controllers, beside the video; none is no matter)
     if (opts.useGpu) {
         // SDL's GPU renderer, on Direct3D 12 on Windows unless told otherwise (our shaders are
         // DXIL there); elsewhere on SDL's choice (Vulkan, for which they're SPIR-V).
@@ -843,7 +847,7 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
                 extras.originalFonts = *opts.originalFonts;
             }
             extras.smoothEffects = extras.smoothEffects && !opts.stockEffects;
-            extras.hdSpellFx = extras.hdSpellFx && !opts.stockEffects;
+            extras.hdSpellFx = (extras.hdSpellFx || opts.hdSpellFx) && !opts.stockEffects;
             extras.perPixelLight = extras.perPixelLight && !opts.gridLight;
             extras.bloom = extras.bloom && !opts.noBloom;
             extras.frameRate = extras.frameRate && app->showFps;
@@ -1020,10 +1024,14 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
         }
         if (opts.hostSettings) {
             // Our own game: the server here on its port, and we join it like anyone else.
+            const nox::modes::Mode* campaign = campaignMod(app->hostCoopCampaignTest);
+            if (!app->hostCoopCampaignTest.empty() && !campaign) {
+                // (--host-coop-campaign naming no installed campaign mod: refused as the co-op mode
+                // refuses it, before anything's saved or hosted.)
+                throw std::runtime_error("--host-coop-campaign: no campaign \"" + app->hostCoopCampaignTest + "\" among the mods");
+            }
             if (opts.hostSettings->solo && opts.hostSettings->map.empty()) {
-                const nox::modes::Mode* campaign =
-                    app->hostCoopCampaignTest.empty() ? nullptr : nox::modes::registry().find(app->hostCoopCampaignTest);
-                opts.hostSettings->map = campaign && campaign->info.campaign // (--host-coop-campaign: its first map, the one it ships)
+                opts.hostSettings->map = campaign // (--host-coop-campaign: its first map, the one it ships)
                                              ? campaignMapPath(app->gameDir, campaign->info.id, campaign->info.campaign->firstMap).string()
                                              : std::string(nox::client::solo_menu::firstMap(opts.profile.playerClass));
             }
@@ -1102,7 +1110,8 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
             // --menu-clicks, --mouse-script and --screenshot go straight to the main menu (or
             // --browse to the game list); --movie NAME plays that movie first.
             const bool automated =
-                !opts.forceStartUp && (!opts.menuClicks.empty() || !app->mouseScript.empty() || !app->screenshot.empty());
+                !opts.forceStartUp && (!opts.menuClicks.empty() || !app->mouseScript.empty() || !app->padScript.empty() ||
+                                       !app->screenshot.empty());
             if (opts.browse) {
                 if (app->audio) {
                     app->audio->music(25); // the menus' music, "shell" (game_showMainMenu)
@@ -1142,9 +1151,9 @@ SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[])
             } else if (!opts.movieArg.empty()) {
                 app->movie->play(opts.movieArg, movies::Skip::AnyInput, [app] { startMainMenu(*app); });
             } else if (automated) {
-                startMainMenu(*app);
+                padModeStart(*app, [app] { startMainMenu(*app); });
             } else {
-                startUp(*app);
+                padModeStart(*app, [app] { startUp(*app); }); // ((noxcpp) a pad there: which to play with, asked first)
             }
             app->menus->queueClicks(std::move(opts.menuClicks));
             SDL_Log("noxsdl %s: menus", nox::version());
@@ -1218,6 +1227,12 @@ void pressWithHand(App& app, std::uint32_t code, Act act)
 SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
 {
     auto* app = static_cast<App*>(appstate);
+    // (noxcpp) The game controllers first: the pads kept, the device in use; a pad button's edge
+    // for the bindings below (or, with a menu up, its MenuBack as Escape: the event is that key's).
+    const std::optional<pad::PadEdge> padEdge = padEventFirst(*app, *event);
+    if (padModeEvent(*app, *event)) {
+        return SDL_APP_CONTINUE; // ((noxcpp) the question which to play with, or the mouse in the pad's mode)
+    }
     if (event->type == SDL_EVENT_KEYMAP_CHANGED && app->input) {
         app->input->layoutChanged(); // (another keyboard layout: the keys' labels as it prints them)
     }
@@ -1253,7 +1268,9 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
             return SDL_APP_CONTINUE;
         }
         if (!app->playTestCaptured) {
-            app->editor->handleEvent(*event);
+            if (!pad::GamepadManager::isPadEvent(*event)) { // (the editor ignores the pads)
+                app->editor->handleEvent(*event);
+            }
             return SDL_APP_CONTINUE;
         }
         if (event->type == SDL_EVENT_KEY_DOWN && !event->key.repeat && event->key.key == SDLK_F2) {
@@ -1314,7 +1331,9 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
             sessionToGame(*app); // (back to the session's game)
             return SDL_APP_CONTINUE;
         }
-        app->editor->handleEvent(*event);
+        if (!pad::GamepadManager::isPadEvent(*event)) { // (the editor ignores the pads)
+            app->editor->handleEvent(*event);
+        }
         return SDL_APP_CONTINUE;
     }
     // The mouse in the game's output pixels (a letterboxed game's from its area's corner).
@@ -1346,7 +1365,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
         if (event->type == SDL_EVENT_QUIT) {
             return SDL_APP_SUCCESS;
         }
-        if (app->input && (event->type == SDL_EVENT_KEY_UP || event->type == SDL_EVENT_MOUSE_BUTTON_UP)) {
+        if (app->input && (event->type == SDL_EVENT_KEY_UP || event->type == SDL_EVENT_MOUSE_BUTTON_UP || (padEdge && !padEdge->down))) {
             app->input->releaseAll();
         }
         app->movie->handleEvent(*event);
@@ -1361,8 +1380,17 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
         app->inputConfig->handleEvent(*event, app->camera.viewWidth, app->camera.viewHeight);
         return SDL_APP_CONTINUE;
     }
+    // (noxcpp) The Controller screen the same, with the pad's buttons too (as they are while it waits
+    // for one).
+    if (app->controllerWindow && app->controllerWindow->isOpen() && event->type != SDL_EVENT_QUIT) {
+        if (app->input && (event->type == SDL_EVENT_KEY_UP || event->type == SDL_EVENT_MOUSE_BUTTON_UP || (padEdge && !padEdge->down))) {
+            app->input->releaseAll();
+        }
+        app->controllerWindow->handleEvent(*event, padEdge, app->camera.viewWidth, app->camera.viewHeight);
+        return SDL_APP_CONTINUE;
+    }
     if (app->options && app->options->isOpen() && event->type != SDL_EVENT_QUIT) {
-        if (app->input && (event->type == SDL_EVENT_KEY_UP || event->type == SDL_EVENT_MOUSE_BUTTON_UP)) {
+        if (app->input && (event->type == SDL_EVENT_KEY_UP || event->type == SDL_EVENT_MOUSE_BUTTON_UP || (padEdge && !padEdge->down))) {
             app->input->releaseAll();
         }
         app->options->handleEvent(*event, app->camera.viewWidth, app->camera.viewHeight);
@@ -1411,6 +1439,9 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
             }
         }
     }
+    if (padEdge && !padEdge->down) {
+        padRelease(*app, *padEdge); // (noxcpp: a pad button's, as a key's)
+    }
     // A mode's window's press ends at its release whoever has the pointer now (its press went to
     // no one else), and is let go when the focus goes.
     if (event->type == SDL_EVENT_MOUSE_BUTTON_UP) {
@@ -1455,7 +1486,7 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
     // amount box or message is up).
     if (live && app->tradeScreens && menuClosed() &&
         (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_BUTTON_UP ||
-         event->type == SDL_EVENT_MOUSE_MOTION || event->type == SDL_EVENT_MOUSE_WHEEL) &&
+         event->type == SDL_EVENT_MOUSE_MOTION || event->type == SDL_EVENT_MOUSE_WHEEL || gui::isNavEvent(*event)) &&
         app->tradeScreens->handleEvent(*event, app->live->client().world(), cam.viewWidth, cam.viewHeight)) {
         return SDL_APP_CONTINUE;
     }
@@ -1502,6 +1533,14 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
     // typed in; the game goes on round them.
     if (live && app->serverOptions && app->serverOptions->isOpen() && event->type != SDL_EVENT_QUIT &&
         app->serverOptions->handleEvent(app->window, *event, cam.viewWidth, cam.viewHeight)) {
+        return SDL_APP_CONTINUE;
+    }
+    // (noxcpp) A pad button's press nothing above took: its bindings in a game (padPress: none while
+    // the chat, the console or a menu has the input).
+    if (padEdge) {
+        if (padEdge->down) {
+            padPress(*app, *padEdge);
+        }
         return SDL_APP_CONTINUE;
     }
     // Nothing above took it: the bindings in a game, the viewer's own keys and mouse otherwise.
@@ -1652,34 +1691,20 @@ SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event)
             break; // (releases reached the bindings above)
         }
         if (app->cursorType == CursorType::Use && (app->cursorUseable || app->cursorHovered)) {
-            // Action with the Use hand (Cli_ProcessControlEvents, cursor 0xD): MSG_TRY_COLLIDE for
-            // the cursor's pick, a map object's net code being its extent with bit 15, a drawable's
-            // its own, with bit 15 for an IMMOBILE or CLIENT_PERSIST one (CliNet_SendTryCollide).
+            // Action with the Use hand: MSG_TRY_COLLIDE for the cursor's pick (useWithHand).
             pressWithHand(*app, *code, [app] {
-                if (app->cursorUseable) {
-                    app->live->client().collide(static_cast<std::uint16_t>(app->cursorUseable->extent | 0x8000));
-                } else if (app->cursorHovered) {
-                    const auto* d = app->live->client().world().drawable(*app->cursorHovered);
-                    const TypeArt* a = d ? app->art->get(d->typeId) : nullptr;
-                    constexpr std::uint32_t kStatic = nox::things::ObjectClass::Immobile | nox::things::ObjectClass::ClientPersist;
-                    const bool fixed = a && (a->classes & kStatic);
-                    app->live->client().collide(static_cast<std::uint16_t>(*app->cursorHovered | (fixed ? 0x8000 : 0)));
-                }
+                useWithHand(*app, app->cursorUseable ? std::optional<std::uint32_t>(app->cursorUseable->extent) : std::nullopt,
+                            app->cursorHovered);
             });
             break;
         }
         if ((app->cursorType == CursorType::Talk || app->cursorType == CursorType::Trade) && app->cursorHovered) {
-            // Action with the Talk or Trade hand (Cli_ProcessControlEvents' cursor 4 / 3):
-            // MSG_DIALOG start (CliNet_SendDialogStart) or MSG_TRADE open shop (CliNet_SendOpenShop).
+            // Action with the Talk or Trade hand: a dialog or the shop (talkOrTrade).
             pressWithHand(*app, *code, [app] {
                 if (!app->cursorHovered) {
                     return;
                 }
-                if (app->cursorType == CursorType::Talk) {
-                    app->live->client().dialogStart(*app->cursorHovered);
-                } else {
-                    app->live->client().openShop(*app->cursorHovered);
-                }
+                talkOrTrade(*app, app->cursorType == CursorType::Talk, *app->cursorHovered);
             });
             break;
         }
@@ -1784,6 +1809,7 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
         }
         SDL_PushEvent(&e);
     }
+    runPadScript(app, SDL_GetTicks()); // (--pad-script in the menus: times from start-up)
     if (app.movie && app.movie->active()) {
         // A movie (the start-up's, or the main menu's Intro): it alone is drawn.
         app.movie->update(SDL_GetTicks());
@@ -1804,6 +1830,9 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
     if (app.inputConfig) {
         app.inputConfig->update(SDL_GetTicks());
     }
+    if (app.controllerWindow) {
+        app.controllerWindow->update(SDL_GetTicks());
+    }
     if (app.quitRequested) {
         return SDL_APP_SUCCESS;
     }
@@ -1815,7 +1844,7 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
     SDL_RenderClear(app.renderer);
     if (app.legal) {
         app.legal->draw(app.renderer, app.camera.viewWidth, app.camera.viewHeight);
-    } else {
+    } else if (!app.padModeThen) { // ((noxcpp) the start-up's question which to play with: on black, before anything)
         app.menus->draw(app.renderer, app.camera.viewWidth, app.camera.viewHeight);
     }
     if (app.options) {
@@ -1823,6 +1852,9 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
     }
     if (app.inputConfig) {
         app.inputConfig->draw(app.renderer, app.camera.viewWidth, app.camera.viewHeight);
+    }
+    if (app.controllerWindow) {
+        app.controllerWindow->draw(app.renderer, app.camera.viewWidth, app.camera.viewHeight);
     }
     if (const float scale = menuSparkScale(static_cast<float>(app.camera.viewWidth), static_cast<float>(app.camera.viewHeight));
         scale > 0) {
@@ -1855,6 +1887,9 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
     if (app.options && app.options->isOpen()) {
         app.tooltip = app.options->tooltip(); // noxsdl's switches say what they do
         drawTooltip(app, true);
+    } else if (app.controllerWindow && app.controllerWindow->isOpen()) {
+        app.tooltip = app.controllerWindow->tooltip();
+        drawTooltip(app, true);
     }
     drawFps(app);
     if (std::exchange(app.logMenuPointer, false)) {
@@ -1866,6 +1901,8 @@ SDL_AppResult menusFrame(App& app, bool shotReady)
                 pointerSourceName(pointerSource(app.testMouse.has_value(), app.playTestMouse.has_value(), false)), mouse.x, mouse.y,
                 SDL_GetWindowRelativeMouseMode(app.window) ? "on" : "off", SDL_CursorVisible() ? "shown" : "hidden");
     }
+    drawOsk(app); // ((noxcpp) the pad's on-screen keyboard, while it's up)
+    drawPadModeAsk(app); // ((noxcpp) which to play with, while it's asked)
     // The menus' pointer, at their 640 x 480 layout's scale.
     drawCursor(app, CursorType::Select,
                std::min(static_cast<float>(app.camera.viewWidth) / 640.0f,
@@ -1940,6 +1977,13 @@ void updateGameWindows(App& app)
     }
     if (app.inputConfig) {
         app.inputConfig->update(SDL_GetTicks());
+    }
+    if (app.controllerWindow) {
+        if (app.openController && app.live->client().stage() == nox::client::HeadlessClient::Stage::InGame) {
+            app.openController = false;
+            app.controllerWindow->open(app.padConfig);
+        }
+        app.controllerWindow->update(SDL_GetTicks());
     }
     if (app.inventory) {
         if (app.openInventory && app.live->client().stage() == nox::client::HeadlessClient::Stage::InGame &&
@@ -2215,15 +2259,26 @@ void sendGameInput(App& app)
     static const int kMoveForward = InputBindings::control("MoveForward");
     static const int kInvertSpellTarget = InputBindings::control("InvertSpellTarget");
     const bool keysFree = !(app.quitMenu && app.quitMenu->isOpen());
+    // (noxcpp) The left stick first: moving the way it leans (its move and cursor point sent), or
+    // at rest with the pad in use facing the way it last went; else the mouse's, as ever.
+    const PadSteer steer = padSteer(app);
+    // (noxcpp) In the pad's mode the mouse never turns us or moves the cursor point, even when the
+    // pad isn't steering (chat, a menu up): the facing stays the pad's last.
+    const bool mouseAims = !app.pads.padInUse() || app.view3d.active();
     const bool attacking3d = keysFree && app.input && app.input->held(kAction); // (the 3D view faces the crosshair while attacking)
-    const bool moving = keysFree && ((app.input && app.input->held(kMoveForward)) || app.view3d.walking(attacking3d));
-    if (moving) {
+    const bool moving = steer == PadSteer::Moves ||
+                        (keysFree && ((app.input && app.input->held(kMoveForward)) || app.view3d.walking(attacking3d)));
+    if (steer == PadSteer::Moves) {
+        // (sent by padSteer)
+    } else if (moving) {
         client.move(app.view3d.walkFacing(facingToMouse(app), attacking3d)); // (the 3D view's keys)
     } else {
         if (app.running) {
             client.move(std::nullopt);
         }
-        client.face(facingToMouse(app));
+        if (steer == PadSteer::None && mouseAims) {
+            client.face(facingToMouse(app));
+        }
     }
     app.running = moving;
     client.setAttack(keysFree && app.input && app.input->held(kAction));
@@ -2241,7 +2296,7 @@ void sendGameInput(App& app)
             uiSound(app, 0x399);
         }
     }
-    {
+    if (steer == PadSteer::None && mouseAims) { // (the pad's cursor point is padSteer's)
         const SDL_FPoint m = mousePos(app);
         client.setCursor(static_cast<int>(app.camera.left() + m.x / app.camera.zoom),
                          static_cast<int>(app.camera.top() + m.y / app.camera.zoom));
@@ -2309,6 +2364,14 @@ void drawWorld(App& app, std::vector<MapView::SceneSprite>& extra, const std::se
         });
     }
     updatePending(app); // (a map editor session's walls, floor and things not yet published: drawing only)
+    // The view's clock this frame, before anything of the world's draw goes by it (the ripples'
+    // feed, the floor's water, the scene; the 3D view sets its own as it draws). (The viewer's
+    // clock; a --shot-sequence's steps with its shots, so they're exactly the step apart however
+    // long each takes to save.)
+    const double viewerFrames = app.shotSequence > 1 ? static_cast<double>(app.shotAfterSeconds) * 30
+                                                     : static_cast<double>(SDL_GetTicks()) * 30 / 1000;
+    app.view->setTime(app.live ? app.interpolator.gameTime() : viewerFrames);
+    feedWaterRipples(app); // (HD water's ripples and splashes, from the drawables over it: drawing only)
     if (app.live && app.minimap && app.view3d.active()) {
         // (In 2D the scene's sort lists the obelisks it draws: liveSprites, drawnMarkers.)
         app.minimap->observe(app.live->client().world(), app.camera, sight); // obelisks seen
@@ -2340,7 +2403,6 @@ void drawWorld(App& app, std::vector<MapView::SceneSprite>& extra, const std::se
             }
         }
         app.view->setCollectBloom(app.bloom != nullptr);
-        app.view->setTime(app.live ? app.interpolator.gameTime() : static_cast<double>(SDL_GetTicks()) * 30 / 1000);
         if (app.effects) {
             // The effects' sort (the particles sorted into the scene, and the sight test of
             // the drawables drawn over it), with this frame's sight.
@@ -2459,9 +2521,10 @@ void drawGameHud(App& app)
     // (The game's own HUD pieces: not while we observe, nor under a mod's covering window.)
     const bool hudPieces = gameHudShown(app);
     if (app.renderGui && hudPieces && !(app.tradeScreens && app.tradeScreens->hidesHud())) {
-        app.hud->draw(app.renderer, app.font.get(), *app.sprites, client.world(), client.netCode(),
-                       quickbarState(app), app.camera.viewWidth, app.camera.viewHeight,
-                       gameFrame(app));
+        QuickbarState bar = quickbarState(app);
+        bar.padPrompts = padHudPrompts(app); // ((noxcpp) the pad's buttons in the keys' places while it's in use)
+        app.hud->draw(app.renderer, app.font.get(), *app.sprites, client.world(), client.netCode(), bar, app.camera.viewWidth,
+                      app.camera.viewHeight, gameFrame(app));
     }
     // The windows over the HUD below: at the HUD's scale, with the mouse.
     const int hudW = app.camera.viewWidth;
@@ -2498,6 +2561,11 @@ void drawGameHud(App& app)
         app.inventory->setMulticlass(client.multiclass());
         app.inventory->setGameFlags(gameFlags(app));
         app.inventory->setGameFrame(gameFrame(app));
+        if (const pad::HudPrompts* prompts = padHudPrompts(app)) { // ((noxcpp) the pad's swap button for its "V")
+            app.inventory->setPadSwapPrompt(&prompts->swap);
+        } else {
+            app.inventory->setPadSwapPrompt(nullptr);
+        }
         app.inventory->draw(app.renderer, client.world(), client.netCode(), app.camera.viewWidth,
                              app.camera.viewHeight, mousePos(app));
     }
@@ -2834,6 +2902,9 @@ SDL_AppResult SDL_AppIterate(void* appstate)
             app->effects->setView(app->camera);
             app->effects->setGameData(&app->gameData, gameFlags(*app));
             app->effects->update(app->interpolator.gameTime(), app->anchors, app->sprites.get());
+            // The game we host paused (a solo game's: the level-up's 5 s): the level-up's orb rain
+            // falls on as the game draws (paused_draw.hpp).
+            app->effects->drawWhilePaused(SDL_GetTicks(), app->host && (app->host->gameFlags() & nox::server::GameFlag::Paused) != 0);
             app->effects->sceneSprites(*app->sprites, extra);
             // Screen shake moves the view down (Cli_SetCameraCenter adds it to the centre's y).
             app->camera.y += static_cast<float>(app->effects->jiggle());
@@ -2881,17 +2952,16 @@ SDL_AppResult SDL_AppIterate(void* appstate)
                                   app->camera.viewHeight);
     }
 
+    // The map not drawn (a cinematic's black, gameDisableMapDraw): the view black.
+    // Nor while it's held back for its HD images (holdMap).
+    const bool worldShown = (!app->cinematics || app->cinematics->mapDrawn()) && !(app->live && app->mapHeld);
     // A white-flash frame is all white: the game clears the screen and draws nothing else of the
-    // world that frame.
-    const bool whiteFlash =
-        app->live && app->effects->whiteFlash(gameFrame(*app));
+    // world that frame (one game frame's time, however long the game's clock stands: white_flash.hpp).
+    const bool whiteFlash = app->live && app->effects->whiteFlash(SDL_GetTicks(), app->view && worldShown);
     const std::uint8_t clear = whiteFlash ? 255 : 0;
     beginFrame(*app);
     SDL_SetRenderDrawColor(app->renderer, clear, clear, clear, SDL_ALPHA_OPAQUE);
     SDL_RenderClear(app->renderer);
-    // The map not drawn (a cinematic's black, gameDisableMapDraw): the view black.
-    // Nor while it's held back for its HD images (holdMap).
-    const bool worldShown = (!app->cinematics || app->cinematics->mapDrawn()) && !(app->live && app->mapHeld);
     if (app->view && !whiteFlash && worldShown) {
         drawWorld(*app, extra, liveCodes);
     }
@@ -2965,6 +3035,9 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     if (app->live && app->inputConfig) {
         app->inputConfig->draw(app->renderer, app->camera.viewWidth, app->camera.viewHeight);
     }
+    if (app->live && app->controllerWindow) {
+        app->controllerWindow->draw(app->renderer, app->camera.viewWidth, app->camera.viewHeight);
+    }
     if (app->live && app->discon) {
         app->discon->draw(app->renderer, app->camera.viewWidth, app->camera.viewHeight); // (the icon; the lag window over the game's)
     }
@@ -2996,6 +3069,9 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     if (app->options && app->options->isOpen()) {
         app->tooltip = app->options->tooltip(); // noxsdl's switches, in the menus and in a game
         drawTooltip(*app, true);
+    } else if (app->controllerWindow && app->controllerWindow->isOpen()) {
+        app->tooltip = app->controllerWindow->tooltip();
+        drawTooltip(*app, true);
     } else if (app->live && app->renderGui && !briefing) {
         app->tooltip = liveTooltip(*app);
         // (A mode's own tooltip for the item, shown by its drawOver: the game's name gives way.)
@@ -3024,6 +3100,8 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     }
     drawFps(*app);
     drawKillFeed(*app);
+    drawOsk(*app); // ((noxcpp) the pad's on-screen keyboard, while it's up)
+    drawPadModeAsk(*app); // ((noxcpp) which to play with, while it's asked)
     drawCursor(*app, app->live && !briefing ? app->cursorType : CursorType::Select, app->camera.zoom);
     if (app->live && app->cinematics && !app->live->client().downloadPercent()) {
         // The fades over everything, the pointer too (mainloop's fades' draw with 1). Not while a
@@ -3034,6 +3112,19 @@ SDL_AppResult SDL_AppIterate(void* appstate)
     endFrame(*app);
 
     // A screenshot run: the shot saved, then a game is left (the viewer just ends).
+    if (shotReady && app->shotSequence > 1) {
+        // --shot-sequence: each shot under its own number; the last ends the run as one shot does.
+        const std::string whole = app->screenshot;
+        const std::filesystem::path path(whole);
+        app->screenshot = (path.parent_path() / (path.stem().string() + std::format("_{:02}", app->shotIndex) + path.extension().string())).string();
+        const bool last = ++app->shotIndex >= app->shotSequence;
+        if (!last) {
+            saveScreenshot(*app);
+            app->screenshot = whole;
+            app->shotAfterSeconds += app->shotStep;
+            shotReady = false;
+        }
+    }
     if (shotReady) {
         app->shotTaken = true;
         const bool saved = saveScreenshot(*app);
@@ -3072,6 +3163,8 @@ void SDL_AppQuit(void* appstate, SDL_AppResult /*result*/)
         app->mapPictures.reset(); // (the map vote's pictures too)
         app->legal.reset();
         app->audio.reset(); // (writes --audio-capture's file)
+        app->scriptPad.reset(); // (--pad-script's pad, then the pads and their subsystem)
+        app->pads.shutdown();
         if (app->gammaTarget) {
             SDL_DestroyTexture(app->gammaTarget);
         }

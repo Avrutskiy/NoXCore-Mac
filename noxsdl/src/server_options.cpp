@@ -230,6 +230,15 @@ void ServerOptions::open()
         }
     };
     hear(*window_);
+    // (noxcpp) The game controller: LB / RB the tabs; the type list's lines clicked by A alone (a
+    // click on one chooses it and shuts the list).
+    gui_.setNavTabs([this](int step) {
+        const std::array<gui::Window*, 3> tabs{window_->find(kGameTab), window_->find(kServerTab), window_->find(kBotsTab)};
+        return gui_.stepTabs(tabs, step);
+    });
+    if (gui::Window* types = window_->find(kTypeList)) {
+        types->navLineClicks = false;
+    }
     // windowServerOptionsDrawProc: the screen behind it darkened below its tabs.
     window_->draw = [](gui::Window& self, gui::Painter& p) {
         const SDL_Point pos = self.screenPos();
@@ -719,6 +728,10 @@ bool ServerOptions::onMessage(gui::Window& from, int message)
         }
         return true;
     }
+    if (message == gui::PadScrolled && from.id == kMapList) {
+        scrollMaps(from.scroll); // ((noxcpp) the pad's line moved out of view: the slider with it)
+        return true;
+    }
     // The Server tab's pages take their own controls first.
     if (onServerMessage(from, message)) {
         return true;
@@ -980,8 +993,11 @@ bool ServerOptions::handleEvent(SDL_Window* sdlWindow, const SDL_Event& event, i
             // (Over it the Advanced Server window takes the keys: nothing; the
             // rename dialog's Cancel.)
             // (Advanced...: nothing either; its notice goes.)
+            gui::Window* types = window_->find(kTypeList);
             if (notice_) {
                 closeNotice();
+            } else if (gui::padEscape(event) && types && !types->hidden()) {
+                showTypes(false); // ((noxcpp) the pad's Back shuts the type list alone)
             } else if (rename_) {
                 closeRename();
             } else if (!advserv_ && !advanced_) {
@@ -1034,11 +1050,32 @@ bool ServerOptions::handleEvent(SDL_Window* sdlWindow, const SDL_Event& event, i
             gui_.setFocus(nullptr);
         }
         break;
-    case SDL_EVENT_MOUSE_BUTTON_UP:
     case SDL_EVENT_MOUSE_WHEEL:
+        // (noxcpp) The wheel over the map list, its slider or its arrows scrolls the list a line a
+        // notch, as its arrows do.
+        if (const gui::Window* h = gui_.hovered();
+            h && event.wheel.y != 0 && (h->id == kMapList || h->id == kMapSlider || h->id == kMapUp || h->id == kMapDown)) {
+            if (const gui::Window* list = window_->find(kMapList); list && !list->hidden()) {
+                const int notches = static_cast<int>(event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y);
+                scrollMaps(list->scroll - notches);
+                took = true;
+                break;
+            }
+        }
+        took = gui_.handleEvent(event, width, height);
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_UP:
         took = gui_.handleEvent(event, width, height);
         break;
     default:
+        if (gui::isNavEvent(event)) {
+            // (noxcpp) The game controller's: as a click, a field left once the pad's focus leaves
+            // it (its A on a field gives the field the keys, as a click does).
+            took = gui_.handleEvent(event, width, height);
+            if (gui::Window* f = gui_.focus(); f && gui_.navFocus() != f) {
+                gui_.setFocus(nullptr);
+            }
+        }
         break;
     }
     // The name field left (0x4003 for 0x2775): the game's name at once.

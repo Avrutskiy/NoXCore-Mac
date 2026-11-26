@@ -7,6 +7,7 @@
 
 #include "console.hpp"
 #include "menu_rules.hpp"
+#include "text_fit.hpp"
 
 #include "noxcore/client/movies.hpp"
 #include "noxcore/client/text_fields.hpp"
@@ -180,6 +181,12 @@ public:
     {
         if (c_.hooks_.clearInventoryWeapons) {
             c_.hooks_.clearInventoryWeapons();
+        }
+    }
+    void setBarSlot(int slot, std::uint32_t id) override
+    {
+        if (c_.hooks_.setBarSlot) {
+            c_.hooks_.setBarSlot(slot, id);
         }
     }
 
@@ -1394,11 +1401,7 @@ void Cinematics::drawQuestResults(gui::Painter& p)
         const int limit = (290 - 120) - 16 + x;
         // Shortened a character at a time while too wide, keeping at least 6.
         while (limit <= p.textWidth(name, true) + x && utf8Length(name) >= 6) {
-            // (the last character off)
-            while ((static_cast<unsigned char>(name.back()) & 0xC0) == 0x80) {
-                name.pop_back();
-            }
-            name.pop_back();
+            popLetter(name); // (the last character off)
         }
         p.text(p.firstLine(name, true, column - 8), x, y, true, kQuestOrange);
         y += step / 2 + step;
@@ -1452,7 +1455,9 @@ bool Cinematics::handleEvent(const SDL_Event& event, int width, int height)
     if (brief_.shown) {
         // A modal window over everything; its procedure (while set) takes all but the pointer's
         // coming and going (0x11 / 0x12).
-        if ((event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+        // ((noxcpp) a game controller's button as a key: its press, or the menus' A or tabs)
+        if ((event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || (gui::isNavEvent(event) && gui::navInput(event) >= gui::NavInput::Accept)) {
             briefingInput();
         }
         return event.type != SDL_EVENT_KEY_UP && event.type != SDL_EVENT_MOUSE_BUTTON_UP;
@@ -1488,6 +1493,15 @@ void Cinematics::openLoadMenu()
         nox::gui::WindowDef def = nox::gui::loadWindowFile(gameDir_ / "window" / "selchar.wnd");
         addCampaignLine(def, campaignTitle_, 108, 92, 400, 14);
         loadMenu_ = gui_.load(def, [this](gui::Window&, int message, gui::Window& from) {
+            if (message == gui::PadScrolled) {
+                // (noxcpp) The game controller scrolled the lists' line into view: the three together.
+                for (const auto id : {kLists, kNames, kInfo}) {
+                    if (gui::Window* l = loadMenu_->find(id)) {
+                        l->scroll = from.scroll;
+                    }
+                }
+                return true;
+            }
             return message == gui::Clicked && onLoadMenu(from);
         });
         if (!loadMenu_) {
@@ -1496,6 +1510,14 @@ void Cinematics::openLoadMenu()
         drawCampaignLine(loadMenu_, campaignTitle_);
         if (gui::Window* lists = loadMenu_->find(kLists)) {
             lists->proc = loadMenu_->proc;
+            // (noxcpp) The game controller goes to the three lists as one (the first: it takes no
+            // click itself).
+            lists->nav = gui::Window::Nav::On;
+            for (const auto id : {kNames, kInfo}) {
+                if (gui::Window* l = lists->find(id)) {
+                    l->nav = gui::Window::Nav::Off;
+                }
+            }
         }
         for (const auto id : {kUp, kDown}) {
             if (gui::Window* w = loadMenu_->find(id)) {

@@ -132,10 +132,28 @@ void Effects::clear()
     vortexOrbs_.clear();
     rainOrbs_.clear();
     jiggle_ = 0;
-    whiteFlash_.reset();
+    whiteFlash_.clear();
     anchorsAtStep_.clear();
     frame_.reset();
     sortedFrames_ = {};
+}
+
+void Effects::tablesChanged()
+{
+    clear(); // (the sparks hold their spark types, which go below)
+    sparkTypes_.clear();
+    tailArts_ = {};
+    rayArts_ = {};
+    particleArt_ = nullptr;
+    killerArt_ = {};
+    summonArt_ = {};
+    rainOrbArts_ = {};
+    vortexOrbArt_ = {};
+    reflectArts_ = {};
+    bubbleArts_ = {};
+    birdies_ = {};
+    shieldAnim_ = {};
+    numbersRead_ = false; // (setGameData reads the numbers again: the file is the same object, its contents not)
 }
 
 int Effects::random(int lo, int hi)
@@ -589,7 +607,7 @@ void Effects::spawn(const nox::client::FxEvent& fx, std::uint32_t frame)
         }
         break;
     case Op::FxWhiteFlash:
-        whiteFlash_ = frame;
+        whiteFlash_.trigger();
         break;
     case Op::FxArrowTrap:
         if (const auto* m = std::get_if<msg::FxArrowTrap>(&fx.fx)) {

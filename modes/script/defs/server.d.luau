@@ -70,7 +70,7 @@ declare nox: {
     --- A text line to everyone as the engine broadcasts one (250 characters at most); colour as nox.tell's.
     textToAll: (text: string, colour: { [any]: number }?) -> (),
     --- # The text overlay
-    --- A string-table key's text ("Journal:<name>", "thing.db:<name>PrettyName", an ability's title, a key of the mode's own), one for everyone or { en = , ru = , ko = ... } each NoX Core client of level 14 gets in its language (English, else the first, for one it hasn't; with others = "own" in the table, { ru = "...", others = "own" }, a player whose language isn't given keeps its own text for the key instead, as if the mode hadn't set it): its journal, story dialogs, item names and descriptions, ability titles and tooltips show it in place of nox.csf's, in order with the game's messages; nil takes it away. Stock and older clients keep nox.csf's. A story dialog's speaker name and a shop window's title ("NPC:<script name>", which the server looks up itself) are the key's text in each player's language (its first 31 letters, the shop's 24), for every client (stock and older ones in the host's language). 64 bytes a key, 4096 a text; false when 512 keys or 64 KB are kept already.
+    --- A string-table key's text ("Journal:<name>", "thing.db:<name>PrettyName", an ability's title, a key of the mode's own), one for everyone or { en = , ru = , ko = ... } each NoX Core client of level 14 gets in its language (English, else the first, for one it hasn't; with others = "own" in the table, { ru = "...", others = "own" }, a player whose language isn't given keeps its own text for the key instead, as if the mode hadn't set it): its journal, story dialogs, item names and descriptions, ability titles and tooltips show it in place of nox.csf's, in order with the game's messages; nil takes it away. Stock and older clients keep nox.csf's. A story dialog's speaker name and a shop window's title ("NPC:<script name>", which the server looks up itself) are the key's text in each player's language (its first 31 letters, the shop's 24), for every client (stock and older ones in the host's language). 64 bytes a key, 4096 a text (UTF-8: other bytes an error); false when 512 keys or 64 KB are kept already.
     setText: (key: string, text: (string | { [string]: string })?) -> boolean,
     --- The overlay's keys starting with prefix (no case) gone, nox.csf's shown again; nil or "": every one.
     clearText: (prefix: string?) -> (),
@@ -140,6 +140,11 @@ declare nox: {
     --- A creature type's monster.bin numbers as { experience, health, questHealth, speed }; nil when none.
     monsterInfo: (thingType: string) -> NoxMonsterInfo?,
     --- Sets a thing's health and most health as fields (no report; nox.touch sends them).
+    --- In a co-op campaign the party's health scale goes on top: at its next pass (at once when
+    --- the party changes, else within 5 s) the director takes the most set here as the creature's
+    --- own base, whatever the value (the scaled number it had too), and keeps the health's share of
+    --- it. A health passed as the creature has it, with only the most changed, stays the party's
+    --- points (set the most every frame and the health doesn't grow).
     setHealth: (id: number, health: number, most: number) -> (),
     --- Marks every part of a thing to be sent to the clients again.
     touch: (id: number) -> (),

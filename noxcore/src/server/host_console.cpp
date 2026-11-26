@@ -10,6 +10,7 @@
 #include "noxcore/io/file.hpp"
 #include "noxcore/map/map_file.hpp"
 #include "noxcore/map/sections.hpp"
+#include "noxcore/modes/registry.hpp"
 #include "noxcore/net/framing.hpp"
 #include "noxcore/server/abilities.hpp"
 #include "noxcore/server/collide.hpp"
@@ -26,6 +27,7 @@
 #include "noxcore/server/solo_save.hpp"
 #include "noxcore/server/sound.hpp"
 #include "noxcore/server/teleport.hpp"
+#include "noxcore/strings/l10n.hpp"
 #include "noxcore/strings/string_table.hpp"
 #include "noxcore/things/object_class.hpp"
 #include "noxcore/things/spell_ids.hpp"
@@ -35,6 +37,7 @@
 #include <array>
 #include <cctype>
 #include <charconv>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 
@@ -80,6 +83,26 @@ int number(std::string_view s)
     return v;
 }
 
+/// wcstol(s, 0, 10) whole, as the cheats read their number: a sign taken, the digits up to the
+/// first that isn't one, past a 32-bit long's range its end; 0 for none.
+std::int32_t longNumber(std::string_view s)
+{
+    std::size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) {
+        ++i;
+    }
+    bool negative = false;
+    if (i < s.size() && (s[i] == '+' || s[i] == '-')) {
+        negative = s[i] == '-';
+        ++i;
+    }
+    std::int64_t v = 0;
+    for (; i < s.size() && s[i] >= '0' && s[i] <= '9'; ++i) {
+        v = std::min<std::int64_t>(v * 10 + (s[i] - '0'), 0x80000000LL);
+    }
+    return static_cast<std::int32_t>(std::clamp<std::int64_t>(negative ? -v : v, INT32_MIN, INT32_MAX));
+}
+
 // The words from index `from` on, joined by single spaces.
 std::string joinWords(const std::vector<std::string>& w, std::size_t from)
 {
@@ -112,6 +135,88 @@ void broadcastSound(World& world)
 }
 
 } // namespace
+
+GameHost::ConsoleMap GameHost::consoleMapOf(std::string_view name) const
+{
+    namespace fs = std::filesystem;
+    ConsoleMap out;
+    std::string_view modId; // ("<mod id>/<name>": that mod's map)
+    if (const auto slash = name.find('/'); slash != std::string_view::npos) {
+        modId = name.substr(0, slash);
+        name = name.substr(slash + 1);
+        if (modId.empty()) {
+            return out; // (CannotAccessMap)
+        }
+    }
+    if (name.empty() || name.find_first_of("/\\:") != std::string_view::npos) {
+        return out; // (CannotAccessMap)
+    }
+    out.name = std::string(name);
+    std::error_code ec;
+    const fs::path here = findMap(name); // (the mode's own, another mod's loaded before, else the maps folder's)
+    const bool hereThere = fs::exists(resolveNoCase(here), ec);
+    if (modId.empty() && hereThere) {
+        out.path = here; // (as it always was: the game's own lookup first)
+        return out;
+    }
+    const modes::Registry& registry = modes::registry();
+    if (!modId.empty()) {
+        // This game's own mod named: its own map of that name, or none.
+        if (const modes::Mode* named = registry.find(modId); named && named->maps && named->maps == options_.modeMaps) {
+            if (const ModeMaps::Entry* e = options_.modeMaps->find(name)) {
+                out.path = e->map;
+                out.name = e->name;
+            }
+            return out;
+        }
+    }
+    // The other installed mods' (loadMods', each its maps\ indexed as it was read).
+    struct Found {
+        const modes::Mode* mod;
+        const ModeMaps::Entry* entry;
+    };
+    std::vector<Found> found;
+    for (const modes::Mode* m : registry.all()) {
+        if (!m->maps || m->maps == options_.modeMaps || (!modId.empty() && !util::equalsNoCase(m->info.id, modId))) {
+            continue;
+        }
+        if (const ModeMaps::Entry* e = m->maps->find(name)) {
+            found.push_back({m, e});
+        }
+    }
+    if (found.empty()) {
+        return out; // (CannotAccessMap)
+    }
+    if (found.size() > 1) {
+        std::string ids;
+        for (const Found& f : found) {
+            ids += (ids.empty() ? "" : ", ") + f.mod->info.id;
+        }
+        out.refusal = l10n::format(NOX_TR("console.load.ambiguous", "More than one mod has a map named {map} ({mods}). Name the one to load, for example: load {mod}/{map}"),
+                                   {{"map", found.front().entry->name}, {"mods", ids}, {"mod", found.front().mod->info.id}});
+        return out;
+    }
+    const Found& f = found.front();
+    if (hereThere && here != f.entry->map) {
+        // (Named, but the name is this game's own map or the maps folder's: that one is the map of
+        // that name in this game, as everywhere.)
+        out.refusal = l10n::format(NOX_TR("console.load.name_taken",
+                                          "This game already has its own map named {map}, so {mod}'s map of that name can't be loaded here."),
+                                   {{"map", f.entry->name}, {"mod", f.mod->info.id}});
+        return out;
+    }
+    if (f.mod->data) {
+        // (Its maps are made for its own game data: thing types this game's tables may lack.)
+        out.refusal = l10n::format(NOX_TR("console.load.mod_data", "{map} belongs to {mod}, which uses its own game data. Host {mod} to play it."),
+                                   {{"map", f.entry->name}, {"mod", f.mod->info.id}});
+        return out;
+    }
+    out.path = f.entry->map;
+    out.nxz = f.entry->nxz;
+    out.name = f.entry->name;
+    out.otherMod = true;
+    return out;
+}
 
 // A line of console output; also sent in chat to the remote sysop whose command printed it.
 // (noxcpp: the exe prints a sysop's command's lines on the host's screen alone, so the sysop saw
@@ -284,7 +389,11 @@ void GameHost::onServerCmd(std::uint8_t peer, std::uint8_t cmd, const std::u16st
     }
     PlayerControl& p = *unit->player;
     // (Game flags 0xC000, a map switching: only 0, 4 and 5.)
-    const bool sysop = sysops_.contains(peer);
+    // Commands 1 and 2 are a sysop's, or anyone's in a solo game (0x800), which in the game has no
+    // one but its host. (noxcpp: a solo game with guests, the co-op campaign's, has others too:
+    // there only the host's own player is excused, the guests need the sysop's password as in a
+    // network game. VD-81.)
+    const bool trusted = sysops_.contains(peer) || ((world.gameFlags & GameFlag::Solo) && isHostPlayer(it->second));
     switch (cmd) {
     case 0: { // Plr_GoObserver: not over, not a quest, not observing already
         if ((world.gameFlags & GameFlag::GameOver) || world.quest() || (p.statusFlags & 1u)) {
@@ -306,7 +415,7 @@ void GameHost::onServerCmd(std::uint8_t peer, std::uint8_t cmd, const std::u16st
         break;
     }
     case 1: { // a script function by name (a sysop's): run with it as caller and trigger
-        if (!sysop && !(world.gameFlags & GameFlag::Solo)) {
+        if (!trusted) {
             break;
         }
         const std::string name = strings::toUtf8(text.substr(0, text.find(u' ')));
@@ -320,7 +429,7 @@ void GameHost::onServerCmd(std::uint8_t peer, std::uint8_t cmd, const std::u16st
         break;
     }
     case 2: // a console command (a sysop's), run as the host's
-        if (!sysop && !(world.gameFlags & GameFlag::Solo)) {
+        if (!trusted) {
             break;
         }
         print("RemoteSysop");
@@ -527,9 +636,12 @@ void GameHost::runConsole(std::string_view line, std::uint32_t issuer)
         return;
     }
     if (is(0, "load") && w.size() == 2) {
-        // not in a quest; a map of this mode (a network game's, not a solo map's;
-        // "NoMapLoadNewMode" for another mode's, but in a chat game); then it's loaded
-        // ("maploaded").
+        // not in a quest; in a network game a map of this mode (a network game's, not a solo
+        // map's; "NoMapLoadNewMode" for another mode's, but in a chat game); out of one a solo
+        // map, with no mode test; then it's loaded ("maploaded"). (noxcpp: a map this game doesn't
+        // find is looked for in the other installed mods' maps, "<mod id>/<name>" naming one
+        // (consoleMapOf); a solo game's mode may hold a load off (Options::consoleLoad: a co-op
+        // campaign's party busy).)
         if (world.quest()) {
             return;
         }
@@ -538,14 +650,19 @@ void GameHost::runConsole(std::string_view line, std::uint32_t issuer)
         if (name.size() > 4 && equalsNoCase(std::string_view(name).substr(name.size() - 4), ".map")) {
             name.resize(name.size() - 4);
         }
-        const fs::path path = findMap(name);
+        const ConsoleMap pick = consoleMapOf(name);
+        if (!pick.refusal.empty()) {
+            printText(pick.refusal);
+            return;
+        }
         std::uint32_t types = 0;
+        map::MapFile file;
         try {
-            if (!fs::exists(resolveNoCase(path))) {
+            if (pick.path.empty() || !fs::exists(resolveNoCase(pick.path))) {
                 print("CannotAccessMap", {name});
                 return;
             }
-            const auto file = map::loadMapFile(path);
+            file = map::loadMapFile(pick.path);
             types = file.find(map::MapInfo::kName) ? map::decodeSection<map::MapInfo>(file).gameFlags : 0;
         } catch (const std::exception&) {
             print("CannotAccessMap", {name});
@@ -554,13 +671,51 @@ void GameHost::runConsole(std::string_view line, std::uint32_t issuer)
         if (types == 0 || (types & 0x200u)) {
             return;
         }
+        // (noxcpp) Another mod's map is this game's from its load on: found by name as the game's
+        // own are (findMap), for its load, its download and a later way back to it.
+        bool pinned = false;
+        const auto pin = [&] {
+            if (pick.otherMod) {
+                pinned = consoleMaps_.emplace(util::lowered(pick.name), ModeMaps::Entry{pick.name, pick.path, pick.nxz}).second;
+                if (pinned) {
+                    pinnedMaps_->set(consoleMaps_); // (the host's own client finds it too: hostMapLookup)
+                }
+            }
+        };
+        if ((types & 1u) && !world.network()) {
+            // Out of a network game a solo map goes without the mode test, and its load is
+            // the map's own file: nothing saved first, a visited map's saved copy in WORKING
+            // neither read nor touched (no switch-to-solo), so the map starts anew (MapInitialize,
+            // its players at a player start), and no AUTOSAVE after it (mapLoadOrSaveMB(1)).
+            // (noxcpp) A map with the original game's memory tricks: refused here, nothing moved
+            // (the map load's refusal would load the map it's on again).
+            if (refusedForTricks(pick.name, file, "not loaded; the game stays on " + mapPath_.stem().string())) {
+                return;
+            }
+            pin();
+            if (options_.consoleLoad && !options_.consoleLoad(*this, pick.name)) {
+                if (pinned) {
+                    consoleMaps_.erase(util::lowered(pick.name));
+                    pinnedMaps_->set(consoleMaps_);
+                }
+                printText(l10n::format(NOX_TR("console.load.party_busy",
+                                              "The party can't go to {map} right now (a save is under way, or the host is down). Try again in a moment."),
+                                       {{"map", pick.name}}));
+                return;
+            }
+            world.loadingSavedGame = true;
+            nextMap(pick.name);
+            print("maploaded", {pick.name});
+            return;
+        }
         // Out of chat, the map must allow the mode being played (0x17F0: the game flags' mode bits).
         if (!(world.gameFlags & GameFlag::Chat) && (mapToGameFlags(types) & world.gameFlags & 0x17F0u) == 0) {
             print("NoMapLoadNewMode");
             return;
         }
-        nextMap(name);
-        print("maploaded", {name});
+        pin();
+        nextMap(pick.name);
+        print("maploaded", {pick.name});
         return;
     }
     if (is(0, "list") && is(1, "users")) {
@@ -770,11 +925,52 @@ void GameHost::runConsole(std::string_view line, std::uint32_t issuer)
         } else if (is(1, "mana")) {
             everyPlayer([&](ServerObject& o) { o.player->mana = static_cast<std::uint16_t>(std::min<int>(o.player->mana + 2000, o.player->maxMana)); });
         } else if (is(1, "level") && w.size() >= 3) {
-            const int level = number(w[2]);
+            // Each player at the level (the number's low byte; past 10, 10) with that level's
+            // experience (XPTable's, told), its numbers anew (a warrior's abilities to that level,
+            // untold). In a solo game a warrior's known abilities then go on the host's bar set in
+            // use, ability n in slot n (an award with nothing shown fills no slot): the host's own
+            // player's only, as the game's one player is its client's (a co-op guest's are its
+            // own client's to show). Then its level-up moment comes (the first player's: the
+            // others' find it under way).
+            const bool solo = (world.gameFlags & GameFlag::Solo) != 0;
+            const ServerObject* hostUnit = solo ? hostPlayer(world) : nullptr;
             everyPlayer([&](ServerObject& o) {
-                o.player->level = static_cast<std::uint8_t>(level);
+                auto level = static_cast<std::uint8_t>(longNumber(w[2]));
+                if (static_cast<std::int8_t>(level) > 10) {
+                    level = 10;
+                }
+                // (A level past 127, below 0 as the game compares it: the game reads before the
+                // table's start; no experience here.)
+                const auto index = static_cast<std::int8_t>(level);
+                o.experience = index < 0 ? 0.0f : world.number("XPTable", static_cast<std::size_t>(index));
+                reportExperience(world, o);
+                o.player->level = level;
                 readVals(world, o, false);
+                if (solo && &o == hostUnit && o.player->classId == 0 && world.hostClient) {
+                    for (int a = 1; a < 6; ++a) {
+                        if (o.player->abilityLevel(static_cast<std::size_t>(a)) != 0) {
+                            world.hostClient->setBarSlot(a - 1, static_cast<std::uint32_t>(a));
+                        }
+                    }
+                }
+                if (solo) {
+                    levelUpMoment(f, &o, 0);
+                }
             });
+        } else if (is(1, "gold") && w.size() >= 3) {
+            // Each player's purse: the amount added, or (below 0) taken off as the game takes it, the
+            // amount read as unsigned (so any amount below 0 empties it).
+            const std::int32_t amount = longNumber(w[2]);
+            everyPlayer([&](ServerObject& o) {
+                if (amount < 0) {
+                    subGold(o, static_cast<std::uint32_t>(amount));
+                } else {
+                    addGold(o, amount);
+                }
+            });
+        } else if (is(1, "re-enter")) {
+            // Players shut out of play (status 0x100) may come back in from now on, in this game.
+            world.reenterAllowed = true;
         } else if (is(1, "spells") && w.size() >= 3) {
             const int level = std::clamp(number(w[2]), 1, 5);
             everyPlayer([&](ServerObject& o) { std::fill(o.player->spellLevels.begin(), o.player->spellLevels.end(), static_cast<std::uint8_t>(level)); });

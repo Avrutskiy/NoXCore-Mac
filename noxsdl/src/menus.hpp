@@ -343,8 +343,10 @@ private:
     void showGameInfo(const nox::lobby::ServerEntry& entry, SDL_FPoint at, int width, int height);
     void closeGameInfo();
     void scrollGameInfo(int first);
+    /// (noxcpp) The game list's window for the game controller (its rows, A a click on one).
+    void padGameList(gui::Window& list);
     void loadCharacters();
-    /// (noxcpp) characters_ from listed_: those played at the game's mode first (character_notes'
+    /// (noxcpp) The list shown from listed_: those played at the game's mode first (character_notes'
     /// order), the rest after unless the switch is on.
     void arrangeCharacters();
     void fillCharacterList();
@@ -468,15 +470,18 @@ private:
     std::optional<nox::io::SavedLogin> wolLogin_;
     std::optional<nox::io::SavedLogin> guestLogin_; ///< (Skip Login's, for posting a hosted game)
     std::string pendingHost_;
-    std::vector<Character> characters_;
     // (noxcpp) Where each character was last played (character_labels.hpp): the list as read, with
-    // each one's labels (from its .plr, read once as the list is made); those of characters_ (the list shown), and
-    // each one's places' line; what the screen chooses for, and its switch's screen and choices.
+    // each one's labels (from its .plr, read once as the list is made); the list shown (listed_'s
+    // places, in its order) and their labels, and each one's places' line; what the screen chooses
+    // for, and its switch's screen and choices.
     struct Listed {
         Character character;
         std::optional<nox::client::character_notes::Notes> notes;
     };
     std::vector<Listed> listed_;
+    std::vector<std::size_t> shown_;
+    /// The shown list's `i`th character.
+    const Character& shownCharacter(std::size_t i) const { return listed_[shown_[i]].character; }
     std::vector<const nox::client::character_notes::Notes*> shownNotes_;
     std::vector<std::string> placeLines_;
     nox::client::character_notes::Target charTarget_;
@@ -513,6 +518,7 @@ private:
     std::vector<std::string> clicks_;
     std::uint64_t clickWaitMs_ = 0; ///< a "+ms" step's end
     SDL_Point mouse_{}; ///< in the 640 x 480 layout
+    SDL_Point outputSize_{640, 480}; ///< (noxcpp) the output's size as the last event saw it (the pad's A on a game)
 
     // Character creation.
     const nox::things::ModifierDb& modifiers_;

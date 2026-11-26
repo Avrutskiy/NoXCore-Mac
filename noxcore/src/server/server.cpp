@@ -112,8 +112,11 @@ void Server::loadMapKeeping(const map::MapFile& map, World* old, std::string_vie
     // (The exe's things keep their net codes through a map change: the new map's things, a saved
     // copy's made in play among them, don't take the numbers of those that stay, what the trades
     // gave back among them.)
+    // (A saved copy is read under switch-to-solo: an exit's or a load's, or a game started from a save.)
+    const bool savedCopy = old ? old->switchToSolo : firstLoadFromSave_;
     world_ = World::load(map, things_, old ? old->gameFlags & ~(GameFlag::GameOver | 0x4000000u) : options_.gameFlags,
-                         options_.gameData, options_.modifiers, options_.monsterDb, scriptIds + (caster ? 1 : 0), clock_.frame(), kept);
+                         options_.gameData, options_.modifiers, options_.monsterDb, scriptIds + (caster ? 1 : 0), clock_.frame(), kept,
+                         savedCopy);
     if (old) {
         // (What the switch told the players on the old map, the trades' and the creatures' ends,
         // goes out with the new map's news, first.)
@@ -390,6 +393,7 @@ void Server::takeOptions(World* old)
     world_.autoRespawn = old ? old->autoRespawn : options_.autoRespawn;
     world_.keepAutoRespawn = old ? old->keepAutoRespawn : options_.autoRespawn;
     world_.clanTeams = old ? old->clanTeams : false;
+    world_.reenterAllowed = old ? old->reenterAllowed : false;
     world_.wolGame = old ? old->wolGame : options_.wolGame;
     world_.leaveBones = old ? old->leaveBones : false;
     world_.gestures = old ? old->gestures : true;

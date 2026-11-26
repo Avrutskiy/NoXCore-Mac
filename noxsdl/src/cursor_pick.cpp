@@ -2,9 +2,17 @@
 #include "cursor_pick.hpp"
 
 #include "noxcore/things/object_class.hpp"
+#include "noxcore/things/thing_db.hpp"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <string>
+#include <string_view>
+#include <system_error>
 
 namespace noxsdl::pick {
 
@@ -22,6 +30,95 @@ constexpr float kHalfDiagonal = 0.35355339f;
 constexpr float kSideScale = 0.70710677f;
 
 } // namespace
+
+Extent readExtent(std::string_view line)
+{
+    Extent e;
+    // The hover's: the game's client reader takes a line that starts with CIRCLE or BOX as that
+    // shape ("CIRCLES 9" a circle too), then its decimals after the first word ("%*s %f %f": the
+    // word ends at any white space), each as strtof reads it, 0 from the first that doesn't read.
+    e.hoverKind = line.starts_with("CIRCLE") ? Extent::Kind::Circle : line.starts_with("BOX") ? Extent::Kind::Box : Extent::Kind::None;
+    if (e.hoverKind != Extent::Kind::None) {
+        const auto white = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
+        std::size_t at = 0;
+        while (at < line.size() && white(line[at])) {
+            ++at;
+        }
+        while (at < line.size() && !white(line[at])) {
+            ++at;
+        }
+        const std::string s(line.substr(at));
+        const char* p = s.c_str();
+        for (float& v : e.size) {
+            char* end = nullptr;
+            v = std::strtof(p, &end);
+            if (end == p) {
+                v = 0;
+                break;
+            }
+            p = end;
+        }
+    }
+    // The drawing's: the word before the first space, CIRCLE or BOX whole.
+    const std::size_t space = line.find(' ');
+    const std::string_view word = line.substr(0, space);
+    e.kind = word == "CIRCLE" ? Extent::Kind::Circle : word == "BOX" ? Extent::Kind::Box : Extent::Kind::None;
+    if (e.kind == Extent::Kind::None) {
+        return e;
+    }
+    e.spaced = space != std::string_view::npos;
+    if (!e.spaced) {
+        return e; // (no numbers)
+    }
+    // The whole numbers: after the space, each spaces or tabs then an integer (from_chars: no
+    // sign but '-', no fraction), stopping at the first that isn't.
+    const std::string_view rest = line.substr(space + 1);
+    const char* q = rest.data();
+    const char* const qend = rest.data() + rest.size();
+    for (int& v : e.whole) {
+        while (q < qend && (*q == ' ' || *q == '\t')) {
+            ++q;
+        }
+        if (q >= qend) {
+            break;
+        }
+        const auto [next, ec] = std::from_chars(q, qend, v);
+        if (ec != std::errc{}) {
+            break;
+        }
+        q = next;
+    }
+    return e;
+}
+
+std::optional<Extent> extentOf(const nox::things::ThingDef& def)
+{
+    if (const auto extent = def.lastAttribute("EXTENT")) {
+        return readExtent(*extent);
+    }
+    return std::nullopt;
+}
+
+Shape shapeOf(const nox::things::ThingDef& def)
+{
+    return shapeOf(def, extentOf(def));
+}
+
+Shape shapeOf(const nox::things::ThingDef& def, const std::optional<Extent>& extent)
+{
+    Shape shape;
+    if (extent && extent->hoverKind == Extent::Kind::Circle) {
+        shape.radius = extent->size[0];
+    } else if (extent && extent->hoverKind == Extent::Kind::Box) {
+        shape.box = true;
+        shape.width = extent->size[0];
+        shape.height = extent->size[1];
+    }
+    const nox::things::ZSize z = nox::things::thingZSize(def);
+    shape.zMin = z.bottom;
+    shape.zMax = z.top;
+    return shape;
+}
 
 bool under(const Shape& shape, int x, int y, int z, int cx, int cy)
 {

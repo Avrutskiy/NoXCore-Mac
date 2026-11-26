@@ -30,6 +30,8 @@
 #include "sight.hpp"
 #include "sprite_cache.hpp"
 #include "thing_art.hpp"
+#include "paused_draw.hpp"
+#include "white_flash.hpp"
 
 #include "noxcore/client/fade.hpp"
 #include "noxcore/client/world.hpp"
@@ -89,6 +91,11 @@ public:
     /// drawables this frame, by net code; they must stay valid until the next update (beams
     /// follow them while drawing).
     void update(double time, const Anchors& anchors, SpriteCache* sprites);
+    /// The game we host standing paused (a solo game's pause: the level-up's 5 s): no game frame
+    /// passes, so update() steps nothing, but the game draws on, and the DRAW functions that move
+    /// what they draw go on with it: the level-up's orb rain (paused_draw.hpp). Call it each frame
+    /// after update(), `nowMs` the render clock; `paused` false: nothing happens.
+    void drawWhilePaused(std::uint64_t nowMs, bool paused);
     /// Where a map object the client loaded itself is, by extent: what a net code with bit 15
     /// names (an obelisk at a Drain Mana ray's end), as it has no drawable in the anchors.
     void setStaticPoint(std::function<std::optional<SDL_FPoint>(std::uint16_t)> point) { staticPoint_ = std::move(point); }
@@ -102,6 +109,10 @@ public:
     }
     /// Drops everything (a new map).
     void clear();
+    /// The app's thing.bin and gamedata.bin were replaced (a game's own, or the install's again:
+    /// game_data_swap.hpp): everything is dropped as by clear(), and so is all the effects looked
+    /// up in the old tables (types, images, spark types, numbers), looked up again as next needed.
+    void tablesChanged();
     /// The view this frame: rains start at its top, and vortex orbs go when they leave it.
     void setView(const Camera& camera)
     {
@@ -139,9 +150,10 @@ public:
 
     /// Screen shake (MSG_FX_JIGGLE): world units to add to the camera's y this game frame.
     int jiggle() const { return jiggle_; }
-    /// Whether `frame` is a white-flash frame (MSG_FX_WHITE_FLASH): the game clears the whole
-    /// screen to white instead of drawing it.
-    bool whiteFlash(std::uint32_t frame) const { return whiteFlash_ && *whiteFlash_ == frame; }
+    /// Whether the frame drawn at `nowMs` is a white-flash frame (MSG_FX_WHITE_FLASH,
+    /// white_flash.hpp): the game clears the whole screen to white instead of drawing the world.
+    /// `worldDrawn`: the world would be drawn this frame.
+    bool whiteFlash(std::uint64_t nowMs, bool worldDrawn) { return whiteFlash_.frame(nowMs, worldDrawn); }
 
     /// This client's gamedata.bin (its own copy, as the game's client reads its own) as a game
     /// with `gameFlags` reads it: ManaBombOutRadius, the ring the mana bomb's sparks fill
@@ -307,6 +319,9 @@ private:
         int speed = 0;
         int radius = 0;
         int shrinkEvery = 0, shrinkCountdown = 0; ///< 0: keeps its size
+        /// GlowOrbMoveDraw's (the level-up rain's move orbs): its DRAW moves it, so it flies on
+        /// while a paused game is drawn (drawWhilePaused).
+        bool movesInDraw = false;
         bool dead = false;
         /// A mana bomb charge's orb spirals into (targetX, targetY)
         /// instead: half a turn in 60 frames from `distance` out, starting at `angle`.
@@ -444,7 +459,9 @@ private:
     void drawPuffs(SDL_Renderer* renderer, const Camera& camera, float t);
     // Toxic clouds, vortices and the rains (effects_rain.cpp).
     void stepRain(const Anchor& a, const TypeArt& art, std::uint32_t frame);
+    void addRainOrbs(const Anchor& a, bool blue, std::uint32_t frame);
     void stepRainEffects(std::uint32_t frame);
+    void stepRainOrbs();
     void rainSprites(std::vector<MapView::SceneSprite>& out);
     /// The bubbles' types (BubbleDraw things) addBubble makes, by their dot's colour.
     enum class BubbleKind : std::uint8_t { LightBlue, Red, White, Orange, Green, Violet, LightViolet, Yellow };
@@ -475,7 +492,8 @@ private:
     void spawnOrb(std::string_view type, int x, int y, int targetX, int targetY, std::optional<int> speed = {});
     void lightningParticles(std::string_view spark, SDL_FPoint from, SDL_FPoint to, std::uint32_t frame);
     void stepRays(std::uint32_t frame);
-    void stepOrbs(std::uint32_t frame);
+    /// `drawnOnly`: only the orbs whose DRAW moves them (a paused game's drawn frame).
+    void stepOrbs(std::uint32_t frame, bool drawnOnly = false);
     SDL_FPoint killerPosition(const UndeadKiller& k, double frame) const;
     void drawRays(SDL_Renderer* renderer, const Camera& camera, const SightMap* sight, SDL_Texture* glow);
     void drawHarpoonRope(SDL_Renderer* renderer, const Camera& camera, const Ray& r) const;
@@ -556,7 +574,8 @@ private:
     std::uint32_t gameFlags_ = 0;
     bool numbersRead_ = false;
     int manaBombOutRadius_ = 0; ///< ManaBombOutRadius (whole units, as Math_FloatToInt chops it)
-    std::optional<std::uint32_t> whiteFlash_;
+    WhiteFlash whiteFlash_;
+    PausedDrawClock pausedDraw_; ///< drawWhilePaused's frames
     const Anchors* anchors_ = nullptr; ///< the latest update()'s (owned by the caller)
     std::function<std::optional<SDL_FPoint>(std::uint16_t)> staticPoint_;
     std::function<std::optional<float>(int, int, std::optional<int>)> burstScaleAt_; ///< (setBurstScale's)

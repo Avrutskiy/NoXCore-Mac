@@ -37,6 +37,8 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <span>
@@ -44,6 +46,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace nox::things {
+struct DataFileBytes; // (data_files.hpp)
+}
 
 namespace nox::server {
 
@@ -260,6 +266,12 @@ public:
         /// one's), before it's relayed: true takes it (not relayed; the mode's own answers and
         /// commands, as "?difficulty").
         std::function<bool(GameHost&, std::uint8_t peer, std::u16string_view text)> onChat;
+        /// (noxcpp: a NoX Core mode's) Asked before the host console loads a solo map (its
+        /// MapInfo's type 1: a campaign's) in a solo game: the mode's last word and its own
+        /// preparation (a co-op campaign's party made ready to leave). `map`: the map's name as
+        /// findMap finds it. False: not now (nothing loaded). Either way the load itself is the
+        /// console's, as GAME.EXE's: the map's own file, no save first. None: loaded at once.
+        std::function<bool(GameHost&, const std::string& map)> consoleLoad;
         /// noxcpp's own messages from a noxsdl client (one that identified itself; a stock
         /// client's are dropped), by their opcode: each NoX Core mode's set-up adds its own
         /// (MSG_NOXCPP_MODE_F4 0xF4, MSG_NOXCPP_MODE_F5 0xF5 and MSG_NOXCPP_COOP 0xF7: the built-in
@@ -526,7 +538,8 @@ public:
     /// Where the game's maps are (Options::mapsDir; none: the map's folder's parent).
     std::filesystem::path mapsDir() const;
     /// (noxcpp) The .map file the map `name` (a folder's name, no extension) is for this game: its
-    /// mode's own (Options::modeMaps) when it ships one of that name, else
+    /// mode's own (Options::modeMaps) when it ships one of that name, else another mod's map the
+    /// host console loaded in this game (one the maps folder hasn't), else
     /// <mapsDir>\<name>\<name>.map as it always was (whether or not it's there). Every load, list,
     /// cycle, vote, download and CRC of the game finds its maps through this.
     std::filesystem::path findMap(std::string_view name) const;
@@ -538,6 +551,24 @@ public:
     /// Options::modeRulesDir\<name>\ and read there first, then beside the map in its mod's folder;
     /// every other map's are <mapsDir>\<name, 8 letters>\ as they always were.
     RuleFolders ruleFoldersOf(const std::string& name) const;
+    /// (noxcpp) The maps the host console pinned from other mods (consoleMaps_), shared with the
+    /// host's own client, which reads them on a thread of its own (noxsdl's main thread): a copy
+    /// kept under its own lock, set as a pin is made or taken back, read through find.
+    class PinnedMaps {
+    public:
+        /// The pinned map `name` (any case); none: not pinned.
+        std::optional<ModeMaps::Entry> find(std::string_view name) const;
+        void set(const std::map<std::string, ModeMaps::Entry>& maps);
+
+    private:
+        mutable std::mutex mutex_;
+        std::map<std::string, ModeMaps::Entry> maps_; ///< (by lower-case name; mutex_)
+    };
+    /// (noxcpp) What the host's own client finds a map's file by (HeadlessClient::setHostMaps): the
+    /// mode's own (Options::modeMaps, fixed at the start), then the console's pinned maps
+    /// (PinnedMaps). It holds shared copies alone, so it may be called on any thread and may
+    /// outlive the host.
+    std::function<std::optional<std::filesystem::path>(std::string_view name)> hostMapLookup() const;
     /// The game as XWIS lists it (the WOL record GAME.EXE posts: lobby::makeWolRecord): the name,
     /// the map, the mode, the players and their limit, the quest's stage, the Access settings
     /// (closed, password, the classes refused, the ping limits). The port is the caller's.
@@ -1055,7 +1086,27 @@ private:
     void nextMap(std::optional<std::string> exitTo = std::nullopt);
     /// The load nextMap asked for, in the server's next frame (its load tick: Server's map-load hook).
     void loadNextMap();
+    /// (noxcpp) A map whose script uses the original game's memory tricks: logged (with `what` NoX
+    /// Core does about it) and everyone told why, true; any other: false.
+    bool refusedForTricks(const std::string& name, const map::MapFile& file, std::string_view what);
     std::optional<std::string> pendingExit_;
+    /// (noxcpp) The maps the host console's load took from another installed mod (one this game's
+    /// mode doesn't ship, the maps folder hasn't): by lower-case name, found by findMap after the
+    /// mode's own for the rest of this game (its load, its download's .nxz: mapSendFile, a later
+    /// exit to it), each as its mod's index has it.
+    std::map<std::string, ModeMaps::Entry> consoleMaps_;
+    /// consoleMaps_ as the host's own client reads it (hostMapLookup): set again at each change.
+    std::shared_ptr<PinnedMaps> pinnedMaps_ = std::make_shared<PinnedMaps>();
+    /// The host console's load: the map `name` (a plain name, or "<mod id>/<name>") as this game
+    /// finds it, else in the installed mods (consoleMapOf).
+    struct ConsoleMap {
+        std::filesystem::path path; ///< (empty: none, `refusal` says why)
+        std::filesystem::path nxz;  ///< another mod's: its .nxz as its index found it (empty: none shipped)
+        std::string name;           ///< the map's name to load (the mod's index's spelling)
+        bool otherMod = false;      ///< another mod's: pinned in consoleMaps_ once it's loaded
+        std::string refusal;        ///< the console's line when it can't be loaded (empty: CannotAccessMap)
+    };
+    ConsoleMap consoleMapOf(std::string_view name) const;
     // noxcpp's map vote (map_vote.hpp; not in the stock game).
     MapVote vote_;
     std::minstd_rand voteRng_; ///< (its own: the game's random numbers stay the game's)
@@ -1350,8 +1401,9 @@ private:
     // client asked for (kWant), sent a chunk at a time while its reliable queue has room. None
     // kept in any game without the data.
     struct DataSender {
-        std::vector<std::uint8_t> kinds; ///< (things::DataFile) the files still to go, in order
-        std::uint32_t offset = 0;        ///< in the first of them
+        /// The files still to go, in order (Options::modeData's own: the set is the game's to its end).
+        std::vector<const things::DataFileBytes*> files;
+        std::uint32_t offset = 0; ///< in the first of them
     };
     std::map<std::uint8_t, DataSender> dataSenders_; ///< by peer
     /// The join's kSet to an identified `peer` (before its USE_MAP), when the game has client files.
@@ -1365,6 +1417,13 @@ private:
     /// (noxcpp) The .nxz a download of the map `stem` sends: <mapsDir>\<stem>\<stem>.nxz, or the
     /// one its mode ships beside its own map (none: empty).
     std::filesystem::path mapSendFile(const std::string& stem) const;
+    /// (noxcpp) The map `name`'s entry when it isn't the maps folder's: its mode's own
+    /// (Options::modeMaps), else one the host console pinned from another mod (consoleMaps_); null:
+    /// the maps folder's. (findMap's and mapSendFile's lookup.)
+    const ModeMaps::Entry* mapEntry(std::string_view name) const;
+    /// (noxcpp) A map's download stream made from its .map as stored (u32 its size, then the NXZ
+    /// stream of those bytes: the .nxz layout every client reads); empty when it can't be read.
+    static std::vector<std::uint8_t> nxzFromMap(const std::filesystem::path& map);
     /// (noxcpp) A solo game with guests (Options::soloGuests) loads nothing for downloads as its
     /// maps load, as the exe's solo game doesn't: a guest's request reads the map's .nxz then, or
     /// makes it from the .map when none is shipped (the campaign's maps have none). Whether there's

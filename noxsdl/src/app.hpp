@@ -14,6 +14,11 @@
 //   frame.cpp             the frame's way to the screen: targets, gamma, present, screenshots
 //   game_cursor.cpp       the game's cursor: which one this frame shows, and its draw
 //   editor_glue.cpp      the map editor's glue: opening it, its play-test and edit sessions
+//   pad/pad_game.cpp      the game controller: the pads, noxcore_controller.cfg, its buttons routed
+//   (pad/pad_play.cpp     the pad in a game: aim, targets, interact, its pointer: pad/pad_play.hpp)
+//   (pad/pad_panels.cpp   the pad's snap cursor on the game's panels: pad/pad_panels.hpp)
+//   (pad/osk_game.cpp     the pad's on-screen keyboard: entry fields, chat, the console)
+//   (pad/pad_mode.cpp     the input mode, the pad's or the mouse's, and the question which)
 // main.cpp has SDL's callbacks, the frame and the input's routing; command_line.hpp the
 // command line's reading.
 #pragma once
@@ -28,6 +33,7 @@
 #include "chat_entry.hpp"
 #include "cinematics.hpp"
 #include "console.hpp"
+#include "controller_window.hpp"
 #include "creature_bar.hpp"
 #include "cursor.hpp"
 #include "discon_window.hpp"
@@ -39,6 +45,7 @@
 #include "hud.hpp"
 #include "input.hpp"
 #include "input_config_window.hpp"
+#include "input_mode_ask.hpp"
 #include "interpolator.hpp"
 #include "inventory.hpp"
 #include "item_names.hpp"
@@ -59,6 +66,13 @@
 #include "movie_player.hpp"
 #include "net_stat.hpp"
 #include "options_window.hpp"
+#include "pad/gamepad_manager.hpp"
+#include "pad/input_mode.hpp"
+#include "pad/pad_bindings.hpp"
+#include "pad/pad_panels_state.hpp"
+#include "pad/osk_state.hpp"
+#include "pad/pad_play_state.hpp"
+#include "pad/virtual_pad.hpp"
 #include "pencil_icon.hpp"
 #include "port_mapper.hpp"
 #include "quest_windows.hpp"
@@ -163,6 +177,14 @@ struct App {
     std::string screenshot;
     bool shotTaken = false;
     float shotAfterSeconds = 0;
+    /// --shot-sequence N STEP (tests): N shots STEP seconds apart from --shot-after's, the path's
+    /// name numbered (shot_00.png...), the run going on between them; 1: the one shot.
+    int shotSequence = 1;
+    float shotStep = 0;
+    int shotIndex = 0;
+    /// --water-demo (the viewer, tests): made-up things wading, flying and falling into the water
+    /// by the view's middle, fed to HD water's ripples as a game's drawables are (feedWaterRipples).
+    bool waterDemo = false;
     std::uint64_t inGameSinceMs = 0;
     bool dragging = false;
     bool running = false; ///< live: right button held, running toward the cursor
@@ -345,6 +367,7 @@ struct App {
     int serverOptionsPage = 0;                          ///< --server-options-page N: on that page (ServerOptions::showPageForTest)
     std::string askPasswordTest;                        ///< --ask-password HOST (with --browse): the join's password dialog for HOST
     bool openInventory = false;                         ///< --open-inventory: likewise (tests)
+    bool openController = false;                        ///< (noxcpp) --open-controller: the Controller screen, once in the game (tests)
     std::optional<int> openBook;                        ///< --open-book [N]: the book, at entry N's page (tests)
     /// --mouse-script "MS down|up|rdown|rup|move|esc|goto X Y; ...": the left (or right: moving) button
     /// pressed, let go or the mouse moved at window pixel (X, Y), or Escape (in a game), or (goto) the console's "nx goto X Y" (in a game), MS after joining a game, or in the menus after start-up
@@ -355,7 +378,19 @@ struct App {
         float x = 0, y = 0;
     };
     std::vector<ScriptedMouse> mouseScript;
-    bool expandBarsTest = false;                        ///< --all-spell-sets: the five sets shown (tests)
+    /// (noxcpp) --pad-script "MS press|release|tap BUTTON; MS stick L|R X Y; MS trigger L|R V; ...":
+    /// a made-up pad (scriptPad, pad/virtual_pad.hpp) driven so, MS after joining a game, or in the
+    /// menus after start-up (tests of the pad's input); BUTTON by noxcore_controller.cfg's names.
+    struct ScriptedPad {
+        enum Kind : std::uint8_t { Press, Release, LeftStick, RightStick, LeftTrigger, RightTrigger };
+        std::uint64_t atMs = 0;
+        Kind kind = Press;
+        pad::PadButton button = pad::PadButton::South;
+        float x = 0, y = 0; ///< a stick's point, a trigger's x
+    };
+    std::vector<ScriptedPad> padScript;
+    std::unique_ptr<pad::VirtualPad> scriptPad;
+    bool expandBarsTest = false;                       ///< --all-spell-sets: the five sets shown (tests)
     std::uint32_t awardTest = 0; ///< --award-test N: spell N awarded as a quest does (shown, to the bars), 2 s in
     bool dropEquipped = false;   ///< --drop-equipped: what we wear and hold taken off, 1.5 s in (tests)
     bool quitRequested = false;
@@ -411,6 +446,27 @@ struct App {
     std::unique_ptr<Minimap> minimap; ///< live: the map (TAB; 1 / 2 zoom)
     /// nox.cfg's key bindings (default.cfg's until something is saved).
     std::unique_ptr<InputBindings> input;
+    /// (noxcpp) The game controllers (pad/gamepad_manager.hpp), noxcore_controller.cfg's settings and
+    /// bindings (padConfig: applyPadConfig) and what they make of a button (padRouter; its game
+    /// controls in `input` under pad codes).
+    pad::GamepadManager pads;
+    pad::PadConfig padConfig;
+    pad::PadRouter padRouter;
+    std::uint32_t padReleasesSeen = 0; ///< input->releases() as the pad's layer last saw it
+    std::uint32_t padEscapes = 0;      ///< a bit per PadButton: its press went on as Escape (padEventFirst)
+    bool padFocused = true;            ///< the window has the focus (its focus events; a hidden one never gets any)
+    std::optional<pad::StickVec> padAim; ///< the way last aimed (one long: a stick's lean), while the pad's in use
+    pad::PlayState padPlay;            ///< the pad in a game: aim, target, pointer (pad/pad_play.hpp)
+    pad::InputModeChoice padModeChoice; ///< when to ask which to play with (pad/pad_mode.cpp)
+    std::unique_ptr<InputModeAsk> padModeAsk; ///< the question, while it's up
+    std::function<void()> padModeThen;  ///< the start-up's first screen, once answered
+    std::uint64_t padModeWaitUntilMs = 0; ///< the start-up waiting a moment for a pad SDL is still finding
+    std::optional<pad::InputDevice> padModeForced; ///< --input-mode pad / mouse (tests); ask: none, padModeAskForced
+    bool padModeAskForced = false;      ///< --input-mode ask: asked even in a test run
+    pad::PromptCache padPrompts;       ///< the HUD's pad prompts, made again when the config or the pad changes
+    pad::RumbleWatch padRumble;        ///< our health and level as last seen (the rumble's cue)
+    pad::PanelState padPanels;         ///< the pad's snap cursor on the game's panels (pad/pad_panels.hpp)
+    pad::OskState osk;                 ///< the pad's on-screen keyboard (pad/osk_game.cpp)
     /// The view in a game, as the game's Options set it: how much of the world shows (one of its
     /// screen resolutions: one screen pixel was one world unit), and the game window's size in
     /// percent (VideoSize, 40-100; Page Up / Page Down step it by 2, draw_setCutSize). The resolution's
@@ -495,6 +551,7 @@ struct App {
     bool renderBubbles = true; ///< RenderBubbles: chat bubbles
     std::unique_ptr<OptionsWindow> options; ///< the game's Options window
     std::unique_ptr<InputConfigWindow> inputConfig; ///< Options' Input Config: the key bindings
+    std::unique_ptr<ControllerWindow> controllerWindow; ///< (noxcpp) Options' Controller: the pad's buttons and settings
     std::unique_ptr<ChatEntry> chat;        ///< typing a chat line (Chat / TeamChat)
     std::unique_ptr<MapDownload> mapDownload; ///< the map download screen (mapdnld.wnd)
     std::unique_ptr<RankBoard> rankBoard;     ///< the scoreboard (ToggleRank, F9)
@@ -931,6 +988,12 @@ void bookEvents(App& app);
 void loadBars(App& app);
 void saveBars(App& app);
 bool leftMouse(App& app, bool down, float x, float y);
+/// (noxcpp) The bar's spell being dragged let go off the bar, as the mouse's release there: the
+/// slot it came from emptied (the game controller's drop off the bar).
+void dropBarDragOff(App& app);
+/// (noxcpp) A book's spell or ability put on slot `slot` of the set in use, as the book's drop there
+/// (the game controller's slot buttons on a book entry).
+void bookSpellToSlot(App& app, std::uint32_t id, int slot);
 
 // live_scene.cpp
 void syncWalls(App& app);
@@ -938,6 +1001,10 @@ void syncWalls(App& app);
 void sightBlockers(App& app, std::vector<SightMap::Blocker>& out);
 std::vector<MapView::SceneSprite> liveSprites(App& app, std::vector<SDL_FPoint>& unsprited, std::vector<HealthBar>& bars);
 void fxDemo(App& app, std::uint32_t frame, std::vector<MapView::SceneSprite>& extra);
+/// HD water's ripples and splashes (water_ripples.hpp) fed from the game's drawables near the view:
+/// the creatures, missiles and items, where they are over the water. Nothing while the view draws
+/// no HD water.
+void feedWaterRipples(App& app);
 void soundLoops(App& app, const std::set<std::uint32_t>& liveCodes);
 std::vector<LightSource> frameLights(App& app, const std::set<std::uint32_t>& liveCodes);
 
@@ -962,10 +1029,98 @@ void drawTooltip(App& app, bool below = false);
 // live_controls.cpp
 /// Picks up `netCode` (MSG_TRY_GET) unless there's no room for it (CliNet_SendPickup).
 void tryPickup(App& app, std::uint16_t netCode);
+/// Live: the Use hand's Action (MSG_TRY_COLLIDE) on a useable map object (its extent) or else a
+/// drawable: the mouse's click with that hand, and the pad's A.
+void useWithHand(App& app, std::optional<std::uint32_t> useableExtent, std::optional<std::uint16_t> drawable);
+/// Live: the Talk hand's Action (MSG_DIALOG start) or the Trade hand's (MSG_TRADE open shop) on `netCode`.
+void talkOrTrade(App& app, bool talk, std::uint16_t netCode);
 /// Live: what a control does when its key is pressed; whether it did anything.
 bool liveControl(App& app, std::string_view control);
 /// The controls a key or button press fired; whether there were any.
 bool liveControls(App& app, const std::vector<std::string>& controls);
+
+// pad/pad_game.cpp (noxcpp: the game controller in the program)
+/// The pads started (SDL's gamepad subsystem; gamecontrollerdb.txt beside the program),
+/// noxcore_controller.cfg read, --pad-script's pad attached. After the window is made.
+void startPads(App& app);
+/// noxcore_controller.cfg read (the defaults without one) and applied.
+void loadPadConfig(App& app);
+/// noxcore_controller.cfg as the file has it (the defaults without one), not applied.
+pad::PadConfig readPadConfig(const App& app);
+/// `config` in use: the router, the dead zones, the game controls' pad bindings (what's held let go).
+void applyPadConfig(App& app, pad::PadConfig config);
+/// app.padConfig written to noxcore_controller.cfg (beside noxcore.cfg; never nox.cfg).
+bool savePadConfig(const App& app);
+/// Whether the pad drives the game now: in a game, the window focused, no chat, console, in-game
+/// menu, Options, input config, movie or editor having the input.
+bool padGameInput(const App& app);
+/// Whether a menu, or a window owning Escape (chat, the console), has the input: the pad's MenuBack
+/// is Escape then.
+bool padHasMenus(const App& app);
+/// First for every event: the pads kept; a pad button's or trigger's edge returned for padRelease /
+/// padPress, unless it went on as an Escape key (`event` is that key's then).
+std::optional<pad::PadEdge> padEventFirst(App& app, SDL_Event& event);
+/// A pad button's release: what its press holds let go (whatever has the input).
+void padRelease(App& app, const pad::PadEdge& edge);
+/// A pad button's press that reached the game's controls (gated by padGameInput): its controls
+/// fired (liveControls), the pad's own actions told to padAction.
+void padPress(App& app, const pad::PadEdge& edge);
+/// The pad's own game actions (Interact, TargetNext / TargetPrevious), pressed or let go.
+void padAction(App& app, pad::PadAction action, bool down);
+/// The HUD's pad prompts (the slots' and potions' buttons) while the pad is the device in use, else null.
+const pad::HudPrompts* padHudPrompts(App& app);
+/// An action's prompt (its button, after the modifier's when it's on that layer), as named now.
+pad::PromptLabels padPrompt(const App& app, std::string_view action);
+// (pad/pad_menu.cpp: the pad in the menus and the game's windows)
+/// A pad button's press while a menu or a game window has the pad (padMenusUp): the D-pad, MenuAccept
+/// and the tabs go on as a nav event (gui::navEvent: `event` becomes it), for the Gui that has the
+/// pad; the edge is still padPress's when no window takes it.
+void padMenuInput(App& app, const pad::PadEdge& edge, SDL_Event& event);
+/// Whether a menu (padHasMenus) or a game window with somewhere for the pad to go has it.
+bool padMenusUp(const App& app);
+/// Each frame (beginFrame), with a pad connected: which Gui has the pad (gui::navFrame), and a held
+/// D-pad direction or the left stick (in the menus) repeating.
+void padMenuFrame(App& app);
+/// The left stick this frame (sendGameInput, first): the pads read; walking or running the way it
+/// leans (Moves: the move and the cursor point sent), or at rest with the pad in use, facing the way
+/// it last leaned (Holds: the facing and cursor point sent); None: the mouse's as ever.
+enum class PadSteer : std::uint8_t { None, Holds, Moves };
+PadSteer padSteer(App& app);
+// (pad/osk_game.cpp: the pad's on-screen keyboard)
+/// Whether the on-screen keyboard is up (it has the pad then).
+bool oskOpen(const App& app);
+/// Every event, from padEventFirst while the keyboard is up: a pad button's press is the
+/// keyboard's (true: `event` is made nobody's), a real key or the input method's typing closes it.
+bool oskEvent(App& app, SDL_Event& event, const std::optional<pad::PadEdge>& edge);
+/// Each frame with a pad connected (padMenuFrame): opens it on an entry field the pad's A gave the
+/// typing (the chat line, the console opened with the pad in use), closes it when that's gone, the
+/// held D-pad and the left stick.
+void oskFrame(App& app);
+/// Drawn over everything but the pointer while it's up.
+void drawOsk(App& app);
+/// --pad-script's steps due `elapsedMs` in (after joining, or from start-up in the menus).
+void runPadScript(App& app, std::uint64_t elapsedMs);
+std::vector<App::ScriptedPad> parsePadScript(std::string_view script);
+// (pad/pad_mode.cpp: the input mode, the pad's or the mouse and keyboard's, and the question)
+/// The start-up's first screen: `start` (the movies and the legal screen, or the main menu) runs
+/// once the player has said which to play with when a pad is connected (asked before anything
+/// else), at once with none.
+void padModeStart(App& app, std::function<void()> start);
+/// Every event, after padEventFirst: the question's while it's up, a pad coming or going; in the
+/// pad's mode the mouse's events dropped. True: taken (nothing else sees it).
+bool padModeEvent(App& app, const SDL_Event& event);
+/// Whether the pad's presses are heard in the mouse's mode now (the question is up, the Controller
+/// screen waits for a button).
+bool padModeHearsPad(const App& app);
+/// Each frame (menus and game): the question shown once it's due and something may ask it.
+void padModeFrame(App& app);
+/// The question over everything (menus and game), while it's up.
+void drawPadModeAsk(App& app);
+/// Whether it's up (the mouse's pointer is drawn for it whatever the mode).
+bool padModeAsking(const App& app);
+/// The input mode: the pad's (the mouse's pointer never drawn, the mouse ignored) or the mouse and
+/// keyboard's (the pad ignored). Not kept between runs.
+void setInputMode(App& app, bool pad);
 
 // test_drive.cpp
 void pickupTest(App& app);
@@ -986,6 +1141,10 @@ SDL_AppResult showMovie(App& app, bool shotReady);
 // game_cursor.cpp
 /// The cursor update's gate on its world part, as a pick::Situation (pick::worldSkipped's fields).
 pick::Situation worldGate(App& app);
+/// The hand a drawable or a useable map object (that first) gives, measured from us (cursorUpdate's
+/// world part: pick::worldCursor); nullopt for the arrow. The cursor's pick's (chooseCursor) and
+/// the pad's A's.
+std::optional<CursorType> handCursor(App& app, std::optional<std::uint16_t> drawable, const MapView::Useable* useable);
 void chooseCursor(App& app, bool inGame);
 void drawCursor(App& app, CursorType type, float scale);
 

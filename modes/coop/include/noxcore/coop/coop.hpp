@@ -115,6 +115,12 @@ public:
             own->clearInventoryWeapons();
         }
     }
+    void setBarSlot(int slot, std::uint32_t id) override
+    {
+        if (own) {
+            own->setBarSlot(slot, id);
+        }
+    }
     bool wallDrawn(int x, int y) const override { return own && own->wallDrawn(x, y); }
     bool minimapMarked(std::uint16_t netCode) const override { return own && own->minimapMarked(netCode); }
     void saveStarting() override
@@ -299,6 +305,11 @@ public:
     void onMessage(server::GameHost& host, std::uint8_t peer, std::span<const std::uint8_t> m);
     /// A player's chat line: the host's "?skip" ends a chapter screen's wait (taken).
     bool onChat(server::GameHost& host, std::uint8_t peer, std::u16string_view text);
+    /// The host console's load of a solo map (GameHost::Options::consoleLoad): the party made ready
+    /// to leave (partyGoes, thawed; no exit, no save); the console then loads the map as a solo
+    /// game's does (its own file, never a visited map's saved copy). False, nothing done: a save
+    /// already asked for or waiting, or no host on its feet.
+    bool consoleLoad(server::GameHost& host, const std::string& map);
 
     /// A player in the party, in the order they came.
     struct Member {
@@ -536,7 +547,8 @@ private:
     struct Base {
         std::int32_t scriptId = 0;
         std::uint16_t type = 0;
-        std::uint16_t own = 0; ///< its own max health
+        std::uint16_t own = 0;  ///< its own max health
+        std::uint16_t left = 0; ///< the max health the scale last left it with (another: a script's own)
     };
     server::RefMap<Base> baseHealth_; ///< each monster's own max health (by extent)
     server::RefMap<std::uint8_t> copies_; ///< spell books put back (extent -> the level they're for)

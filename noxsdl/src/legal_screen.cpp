@@ -30,6 +30,8 @@ LegalScreen::LegalScreen(gui::Resources res, const std::filesystem::path& window
         return true;
     });
     gui_.setModal(screen_);
+    // ((noxcpp) No game controller focus here: any of its buttons goes on, as a key does.)
+    gui_.setPadNavigation(false);
     if (gui::Window* v = screen_->find(kVersion)) {
         v->text = std::string("V:") + nox::version(); // ("V:%S", the exe's version)
     }
@@ -97,8 +99,9 @@ void LegalScreen::handleEvent(const SDL_Event& event, int width, int height)
     if (over_) {
         return;
     }
-    // A key (window message 0x15, state 2) once the count is under 0x10F.
-    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+    // A key (window message 0x15, state 2) once the count is under 0x10F. ((noxcpp) A game
+    // controller's button too: its Back comes as Escape, its other buttons as the menus' input.)
+    if ((event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) || gui::isNavEvent(event)) {
         if (count_ < kInputFrom) {
             leave();
         }

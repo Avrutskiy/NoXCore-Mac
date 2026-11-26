@@ -9,6 +9,7 @@
 #include "console.hpp"
 #include "menu_rules.hpp"
 #include "mode_ui.hpp"
+#include "text_fit.hpp"
 #include "wol_screens.hpp"
 
 #include "noxcore/client/solo_menu.hpp"
@@ -61,6 +62,8 @@ constexpr std::int32_t kCharNew = 501, kCharLoad = 502, kCharDelete = 503, kChar
 // character's places, above the lists where the game's layout is empty; the switch, under the
 // buttons. None of the game's window files use these ids.
 constexpr std::int32_t kCharPlaces = 4291, kCharSwitch = 4292;
+// (noxcpp) The game list's window for the game controller's focus (padGameList).
+constexpr std::int32_t kPadGameList = 4293;
 constexpr SDL_Rect kCharPlacesRect{108, 92, 400, 14}, kCharSwitchRect{140, 399, 336, 15};
 // dlg.wnd
 constexpr std::int32_t kDlgOk = 4001, kDlgCancel = 4002, kDlgText = 4004, kDlgTitle = 4005, kDlgNo = 4006,
@@ -147,6 +150,7 @@ Menus::Menus(gui::Resources res, std::filesystem::path gameDir, BrowserScreen& b
                           [this](gui::Window&, int message, gui::Window& from) {
                               return shellSound(message) && message == gui::Clicked && onOptsBack(from);
                           });
+    optsBack_->navApart = true; // ((noxcpp) the pad goes to the bar once a screen has nothing more that way)
     // The game list's R / F5 as its Refresh button.
     browser_.setRefreshHandler([this](std::uint64_t nowMs) {
         nowMs_ = nowMs;
@@ -373,6 +377,7 @@ void Menus::askJoinPassword(const std::string& host, const nox::client::PlayerPr
     }
     gui_.setModal(dialog_);
     gui_.setFocus(dialog_->find(kDlgEntry));
+    gui_.setNavDefault(dialog_->find(kDlgEntry)); // ((noxcpp) the pad starts on the field: A types)
 }
 
 void Menus::tooOldNotice()
@@ -465,22 +470,14 @@ void Menus::enter(State s)
         // campaign named between the heading and the lists: campaign_line.hpp.)
         nox::gui::WindowDef def = nox::gui::loadWindowFile(windowDir_ / "SelChar.wnd");
         const std::string campaign = solo_ ? soloCampaignTitle() : std::string();
-        addCampaignLine(def, campaign, 108, 92, 400, 14);
+        // (In the strip the places use: a solo screen has no places.)
+        addCampaignLine(def, campaign, kCharPlacesRect.x, kCharPlacesRect.y, kCharPlacesRect.w, kCharPlacesRect.h);
         if (!solo_) {
             // (noxcpp: where the selected character was last played, above the lists; under the
             // buttons, when the game is a mode's, the switch between every character and that
             // mode's alone: character_labels.hpp. With no notes and no mode, nothing shows.)
             const auto add = [&def](std::int32_t id, const SDL_Rect& r, bool clickable) {
-                nox::gui::WindowDef w;
-                w.id = id;
-                w.x = r.x;
-                w.y = r.y;
-                w.width = r.w;
-                w.height = r.h;
-                w.typeName = "USER";
-                w.type = nox::gui::WindowType::User;
-                w.status = clickable ? (st::Enabled | st::NoFocus) : st::NoFocus;
-                def.children.push_back(std::move(w));
+                addUserWindow(def, id, r.x, r.y, r.w, r.h, clickable);
             };
             add(kCharPlaces, kCharPlacesRect, false);
             if (charTarget_.any) {
@@ -488,6 +485,15 @@ void Menus::enter(State s)
             }
         }
         screen_ = gui_.load(def, [this](gui::Window&, int message, gui::Window& from) {
+            if (message == gui::PadScrolled) {
+                // (noxcpp) The game controller scrolled the lists' line into view: the three together.
+                for (const auto id : {kCharLists, kCharKind, kCharName}) {
+                    if (gui::Window* l = screen_->find(id)) {
+                        l->scroll = from.scroll;
+                    }
+                }
+                return true;
+            }
             return shellSound(message) && message == gui::Clicked && onSelChar(from);
         });
         drawCampaignLine(screen_, campaign);
@@ -497,6 +503,14 @@ void Menus::enter(State s)
         slides_.push_back(gui_.slideIn(screen_, {0, -440}, {0, 20}, {0, -40}));
         if (gui::Window* lists = screen_->find(kCharLists)) {
             lists->proc = screen_->proc; // wndSetProc: the lists' clicks reach the screen
+            // (noxcpp) The game controller goes to the three lists as one (the first, round them;
+            // it takes no click itself).
+            lists->nav = gui::Window::Nav::On;
+            for (const auto id : {kCharKind, kCharName}) {
+                if (gui::Window* l = lists->find(id)) {
+                    l->nav = gui::Window::Nav::Off;
+                }
+            }
         }
         if (gui::Window* label = screen_->find(kCharLabel)) {
             label->text = gui_.text(solo_ ? "LoadLabel" : "LoadCharLabel", "SelChar.c");
@@ -574,6 +588,15 @@ void Menus::enter(State s)
                 pickClass(only);
             }
         }
+        // (noxcpp) The game controller starts on the class picked, else the first offered (its
+        // focus points as the mouse does: the class it's on is picked).
+        std::int32_t start = chosenClass_;
+        for (std::int32_t id = kClassFirst; start < 0 && id <= kClassLast; ++id) {
+            if (classOffered(id - kClassFirst)) {
+                start = id;
+            }
+        }
+        gui_.setNavDefault(start >= 0 ? screen_->find(start) : nullptr);
         optsBack_->show(true);
         break;
     }
@@ -610,8 +633,12 @@ void Menus::enter(State s)
         }
         break;
     case State::Browser: {
-        // game_showGameSel: the whole screen from 480 above. It has its own Back.
-        screen_ = gui_.load(windowDir_ / "noxworld.wnd", [this](gui::Window&, int message, gui::Window& from) {
+        // game_showGameSel: the whole screen from 480 above. It has its own Back. (noxcpp: a window
+        // over our game list for the game controller's focus, taking no click: padGameList.)
+        nox::gui::WindowDef def = nox::gui::loadWindowFile(windowDir_ / "noxworld.wnd");
+        addUserWindow(def, kPadGameList, kListFrame.x, kListFrame.y, kListFrame.w, kListFrame.h, true);
+        def.children.back().status |= st::NoInput;
+        screen_ = gui_.load(def, [this](gui::Window&, int message, gui::Window& from) {
             // Its procedure (windowMultiplayerSub) clicks with ButtonPress (but for 10035 / 10036 / 10043 /
             // 10044) and makes no sound on pointing.
             if (message == gui::SliderChanged && from.id == kInfoSlider) {
@@ -622,6 +649,10 @@ void Menus::enter(State s)
                         list->scroll = gui::scrollFromSlider(*sl, from.sliderValue, most);
                     }
                 }
+                return true;
+            }
+            if (message == gui::PadScrolled && from.id == kInfoList) {
+                scrollGameInfo(from.scroll); // ((noxcpp) the pad scrolled the description: its slider with it)
                 return true;
             }
             if (message != gui::Clicked) {
@@ -668,6 +699,19 @@ void Menus::enter(State s)
                                 p.toOutput(pos.x + kListFrame.x, pos.y + kListFrame.y, kListFrame.w, kListFrame.h),
                                 p.pixelSize(false));
         };
+        if (gui::Window* list = screen_->find(kPadGameList)) {
+            padGameList(*list);
+        }
+        if (gui::Window* info = screen_->find(kInfoList)) {
+            // (noxcpp) The description is read, not chosen: the pad scrolls it (up / down past Join,
+            // the right stick), so its arrows aren't stops.
+            info->navText = true;
+            for (const std::int32_t id : {kInfoUp, kInfoDown}) {
+                if (gui::Window* w = screen_->find(id)) {
+                    w->nav = gui::Window::Nav::Off;
+                }
+            }
+        }
         if (!std::exchange(keepList_, false)) { // (the join's wait: the list as it was)
             refreshGames();
         }
@@ -873,12 +917,8 @@ std::string Menus::soloCampaignTitle() const
 
 const nox::modes::CampaignInfo* Menus::soloCampaignInfo() const
 {
-    const std::string id = soloCampaign();
-    if (id.empty()) {
-        return nullptr;
-    }
-    const nox::modes::Mode* m = nox::modes::registry().find(id);
-    return m && m->info.campaign ? &*m->info.campaign : nullptr;
+    const nox::modes::Mode* m = campaignMod(soloCampaign()); // (the save folders' and hosting's rule)
+    return m ? &*m->info.campaign : nullptr;
 }
 
 void Menus::startSolo(const SoloStart& start)
@@ -1378,6 +1418,7 @@ void Menus::showGameInfo(const nox::lobby::ServerEntry& entry, SDL_FPoint at, in
         infoServer_ = BrowserScreen::rowKey(entry);
         box->show(true);
         gui_.setModal(box);
+        gui_.setNavDefault(box->find(kJoin)); // ((noxcpp) the pad on its Join)
         return;
     }
     title("Name");
@@ -1476,6 +1517,42 @@ void Menus::showGameInfo(const nox::lobby::ServerEntry& entry, SDL_FPoint at, in
     infoServer_ = BrowserScreen::address(g);
     box->show(true);
     gui_.setModal(box);
+    gui_.setNavDefault(box->find(kJoin)); // ((noxcpp) the pad on its Join)
+}
+
+void Menus::padGameList(gui::Window& list)
+{
+    // Our game list for the game controller: up and down its rows (the list's own arrow keys),
+    // off its ends to the buttons; A a click on the row (the description box, its Join).
+    list.draw = [](gui::Window&, gui::Painter&) {}; // (the screen draws the list)
+    list.nav = gui::Window::Nav::On;
+    list.padInput = [this](gui::Window&, gui::NavInput in) {
+        const int rows = static_cast<int>(browser_.gameCount());
+        const int row = browser_.selectedRow();
+        switch (in) {
+        case gui::NavInput::Up:
+        case gui::NavInput::Down: {
+            const bool down = in == gui::NavInput::Down;
+            if (rows == 0 || (down ? row >= rows - 1 : row <= 0)) {
+                return false; // (off its end)
+            }
+            SDL_Event key{};
+            key.type = SDL_EVENT_KEY_DOWN;
+            key.key.key = down ? SDLK_DOWN : SDLK_UP;
+            key.key.down = true;
+            browser_.handleEvent(key, nowMs_);
+            return true;
+        }
+        case gui::NavInput::Accept:
+            if (const nox::lobby::ServerEntry* entry = browser_.selectedEntry()) {
+                const nox::lobby::ServerEntry chosen = *entry;
+                showGameInfo(chosen, browser_.selectedRowPoint(), outputSize_.x, outputSize_.y);
+            }
+            return true;
+        default:
+            return false;
+        }
+    };
 }
 
 void Menus::scrollGameInfo(int first)
@@ -1845,6 +1922,8 @@ void Menus::dialog(const std::string& title, const std::string& text, std::uint3
         b->text = noText;
     }
     gui_.setModal(dialog_);
+    // (noxcpp) The game controller starts on No when it asks, else on OK.
+    gui_.setNavDefault(dialog_->find((flags & 0x10) ? kDlgNo : (flags & 1) ? kDlgOk : (flags & 8) ? kDlgYes : kDlgCancel));
 }
 
 void Menus::wolDialog(const std::string& title, const std::string& text, std::uint32_t flags, std::function<void()> onOk,
@@ -1904,10 +1983,10 @@ void Menus::arrangeCharacters()
     for (const Listed& l : listed_) {
         of.push_back(l.notes ? &*l.notes : nullptr);
     }
-    characters_.clear();
+    shown_.clear();
     shownNotes_.clear();
     for (const std::size_t i : nox::client::character_notes::order(of, charTarget_, characterModeOnly())) {
-        characters_.push_back(listed_[i].character);
+        shown_.push_back(i);
         shownNotes_.push_back(of[i]);
     }
 }
@@ -1958,13 +2037,7 @@ void Menus::targetFor(const std::string& host)
     if (name.empty()) {
         return;
     }
-    charTarget_ = {charnotes::Place::Kind::Mode, {}, name, true};
-    for (const nox::modes::Mode* m : nox::modes::registry().all()) {
-        if (m && m->info.name == name) {
-            charTarget_.id = m->info.id; // (one of ours by that name: its id)
-            break;
-        }
-    }
+    charTarget_ = {charnotes::Place::Kind::Mode, modeIdByName(name), name, true}; // (one of ours by that name: its id)
 }
 
 std::string Menus::fitToList(const std::string& text, const gui::Window& list)
@@ -1975,25 +2048,7 @@ std::string Menus::fitToList(const std::string& text, const gui::Window& list)
     gui::Painter measure(nullptr, gui_.resources(), 2.0f, 0.0f, 0.0f);
     measure.setLargeScale(list.largeScale);
     const int room = list.rect.w - 7 - 6;
-    if (measure.textWidth(text, list.largeFont) <= room) {
-        return text;
-    }
-    std::string cut = text;
-    while (!cut.empty()) {
-        do {
-            cut.pop_back(); // (a whole UTF-8 character)
-        } while (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0x80);
-        if (!cut.empty() && (static_cast<unsigned char>(cut.back()) & 0xC0) == 0xC0) {
-            cut.pop_back();
-        }
-        while (!cut.empty() && cut.back() == ' ') {
-            cut.pop_back();
-        }
-        if (measure.textWidth(cut + "...", list.largeFont) <= room) {
-            return cut + "...";
-        }
-    }
-    return {};
+    return fitText(text, room, [&](const std::string& t) { return measure.textWidth(t, list.largeFont); }, true);
 }
 
 void Menus::drawCharacterExtras()
@@ -2011,23 +2066,9 @@ void Menus::drawCharacterExtras()
             const std::string& text = placeLines_[static_cast<std::size_t>(sel)];
             if (text != from) {
                 from = text;
-                shown = text;
-                while (!shown.empty() && p.textWidth(shown, false) > self.rect.w - 4) {
-                    do {
-                        shown.pop_back();
-                    } while (!shown.empty() && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0x80);
-                    if (!shown.empty() && (static_cast<unsigned char>(shown.back()) & 0xC0) == 0xC0) {
-                        shown.pop_back();
-                    }
-                    if (p.textWidth(shown + "...", false) <= self.rect.w - 4) {
-                        shown += "...";
-                        break;
-                    }
-                }
+                shown = fitText(text, self.rect.w - 4, [&](const std::string& t) { return p.textWidth(t, false); });
             }
-            const SDL_Point pos = self.screenPos();
-            const int tw = p.textWidth(shown, false);
-            p.text(shown, pos.x + (self.rect.w - tw) / 2, pos.y + (self.rect.h - p.fontHeight(false)) / 2, false, nox::gui::Color{240, 180, 42});
+            drawGoldLine(self, p, shown);
         };
     }
     // The switch: "Show all" and "<the mode> only" on a dark strip, the one chosen in the gold, the
@@ -2044,18 +2085,7 @@ void Menus::drawCharacterExtras()
                 // (a long mode name, a remote host's: its choice cut with "..." to the strip, once)
                 fitted = true;
                 const int room = self.rect.w - 4 - p.textWidth(all, false) - p.textWidth(bar, false);
-                while (!only.empty() && p.textWidth(only, false) > room) {
-                    do {
-                        only.pop_back(); // (a whole UTF-8 character)
-                    } while (!only.empty() && (static_cast<unsigned char>(only.back()) & 0xC0) == 0x80);
-                    if (!only.empty() && (static_cast<unsigned char>(only.back()) & 0xC0) == 0xC0) {
-                        only.pop_back();
-                    }
-                    if (p.textWidth(only + "...", false) <= room) {
-                        only += "...";
-                        break;
-                    }
-                }
+                only = fitText(std::move(only), room, [&](const std::string& t) { return p.textWidth(t, false); });
             }
             const int wa = p.textWidth(all, false), wb = p.textWidth(bar, false), wo = p.textWidth(only, false);
             int x = pos.x + std::max(2, (self.rect.w - (wa + wb + wo)) / 2);
@@ -2085,9 +2115,9 @@ void Menus::fillCharacterList()
     // character, " - " Noxworld.c:Stage " %d" (its stage, 0 shown as 1).
     const SDL_Color pc = paletteColor(14);
     const nox::gui::Color color{pc.r, pc.g, pc.b, false};
-    placeLines_.assign(characters_.size(), std::string());
-    for (std::size_t i = 0; i < characters_.size(); ++i) {
-        const auto& c = characters_[i];
+    placeLines_.assign(shown_.size(), std::string());
+    for (std::size_t i = 0; i < shown_.size(); ++i) {
+        const auto& c = shownCharacter(i);
         const auto cls = static_cast<std::size_t>(c.info.characterClass);
         const std::string className = gui_.text(std::string("nox.str:") + kClassNames[std::min<std::size_t>(cls, 2)]);
         lists->lines.push_back({" ", color});
@@ -2109,14 +2139,14 @@ void Menus::fillCharacterList()
         name->lines.push_back({line, color});
         kind->lines.push_back({what, color});
     }
-    const int selected = characters_.empty() ? -1 : 0;
+    const int selected = shown_.empty() ? -1 : 0;
     lists->selectedLine = kind->selectedLine = name->selectedLine = selected;
     // findAutosaves: Load and Delete with something to load; New with nothing, or out of a quest, or
     // with fewer than 14 quest characters (client_countPlayerFiles04).
-    enable(screen_, kCharLoad, !characters_.empty());
-    enable(screen_, kCharDelete, !characters_.empty());
+    enable(screen_, kCharLoad, !shown_.empty());
+    enable(screen_, kCharDelete, !shown_.empty());
     enable(screen_, kCharNew,
-           characters_.empty() || !questGame_ || nox::client::solo_menu::countQuestCharacters(saveDir_) < 14);
+           shown_.empty() || !questGame_ || nox::client::solo_menu::countQuestCharacters(saveDir_) < 14);
 }
 
 void Menus::chooseCharacter(const std::string& host)
@@ -2198,13 +2228,13 @@ bool Menus::onSelChar(gui::Window& from)
         }
         return true;
     case kCharLoad: {
-        if (selected < 0 || selected >= static_cast<int>(characters_.size())) {
+        if (selected < 0 || selected >= static_cast<int>(shown_.size())) {
             return true;
         }
         // 0x1F6: a record with no path NoCanDo; the file read again (failing,
         // nothing) and held. The character as saved: name, class, sex, colours
         // and clothes; its spell bars come from its file in the game.
-        const auto& record = characters_[static_cast<std::size_t>(selected)];
+        const auto& record = shownCharacter(static_cast<std::size_t>(selected));
         if (record.path.empty()) {
             gui_.resources().sound(0x39D); // NoCanDo
             return true;
@@ -2220,10 +2250,10 @@ bool Menus::onSelChar(gui::Window& from)
         return true;
     }
     case kCharDelete: {
-        if (selected < 0 || selected >= static_cast<int>(characters_.size())) {
+        if (selected < 0 || selected >= static_cast<int>(shown_.size())) {
             return true;
         }
-        const auto path = characters_[static_cast<std::size_t>(selected)].path;
+        const auto path = shownCharacter(static_cast<std::size_t>(selected)).path;
         if (path.empty()) {
             gui_.resources().sound(0x39D); // (0x1F7: a record with no path, NoCanDo)
             return true;
@@ -2475,7 +2505,12 @@ bool Menus::onSelColor(gui::Window& from)
     // The looks screen's procedure.
     const std::int32_t id = from.id;
     if (id >= kColorSkin && id <= kColorShoes2) {
-        openPicker(id, mouse_);
+        // (noxcpp: the game controller's A opens it beside the button, on the colour it has.)
+        const SDL_Point pos = from.screenPos();
+        openPicker(id, gui::navPadInUse() ? SDL_Point{pos.x - 4, pos.y + from.rect.h / 2} : mouse_);
+        if (picker_ && (from.userData & 0xFFFF) == pickerTable_) {
+            gui_.setNavDefault(picker_->find(kSwatchFirst + static_cast<std::int32_t>(from.userData >> 16)));
+        }
     } else if (id >= kToggleFirst && id <= kToggleLast) {
         // Facial hair (and hair) on or off.
         if (gui::Window* label = screen_->find(id - 20)) {
@@ -2692,6 +2727,7 @@ void Menus::drawOverAll(SDL_Renderer* renderer, int width, int height) const
 void Menus::handleEvent(const SDL_Event& event, int width, int height, std::uint64_t nowMs)
 {
     nowMs_ = nowMs;
+    outputSize_ = {width, height};
     // The mouse kept in layout units (640 x 480) for the picker and the test steps.
     if (event.type == SDL_EVENT_MOUSE_MOTION || event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ||
         event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
@@ -2734,6 +2770,10 @@ void Menus::handleEvent(const SDL_Event& event, int width, int height, std::uint
                 wol_.reset(); // (and gives up a login under "Connecting...")
                 wolLoggingIn_ = false;
             }
+            return;
+        }
+        if (infoServer_ && gui::padEscape(event)) {
+            closeGameInfo(); // ((noxcpp) the game controller's Back shuts the description box alone)
             return;
         }
         // Escape is Back (on the game list: the description box shut first).
